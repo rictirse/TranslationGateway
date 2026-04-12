@@ -1,0 +1,47 @@
+﻿<Window x:Class="TranslationGateway.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:TranslationGateway.ViewModels"
+        xmlns:v="clr-namespace:TranslationGateway.Views"
+        Title="Translation Gateway" WindowStartupLocation="CenterScreen" Height="820" Width="1200"
+        Closing="Window_Closing">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="150"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Background="#F0F0F0">
+            <Button Content="Dashboard" Command="{Binding NavigateCommand}" CommandParameter="Dashboard" Margin="5"/>
+            <Button Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" Margin="5"/>
+            <Button Content="Chat Sandbox" Command="{Binding NavigateCommand}" CommandParameter="Chat" Margin="5"/>
+            <Button Content="Knowledge" Command="{Binding NavigateCommand}" CommandParameter="Knowledge" Margin="5"/>
+            <Button Content="Log" Command="{Binding NavigateCommand}" CommandParameter="Log" Margin="5"/>
+        </StackPanel>
+
+        <ContentControl Grid.Column="1" Content="{Binding CurrentView}">
+            <ContentControl.Resources>
+                <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
+                    <v:DashboardView/>
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                    <v:SettingsView/>
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type vm:ChatViewModel}">
+                    <v:ChatView/>
+                </DataTemplate>
+                
+                <DataTemplate DataType="{x:Type vm:KnowledgeViewModel}">
+                    <v:KnowledgeView/>
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type vm:LogViewModel}">
+                    <v:LogView/>
+                </DataTemplate>
+            </ContentControl.Resources>
+        </ContentControl>
+    </Grid>
+</Window>

@@ -1,0 +1,50 @@
+﻿<UserControl x:Class="TranslationGateway.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d" d:DesignHeight="600" d:DesignWidth="800">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="2*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="1*"/>
+        </Grid.RowDefinitions>
+
+        <DataGrid Grid.Row="0" ItemsSource="{Binding Jobs}" SelectedItem="{Binding SelectedJob}"
+                  AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                  VerticalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="時間" Binding="{Binding Timestamp, StringFormat=\{0:HH:mm:ss\}}" Width="80"/>
+                <DataGridTextColumn Header="原文摘要" Binding="{Binding UserPrompt}" Width="*"/>
+                <DataGridTextColumn Header="總耗時 (I)" Binding="{Binding TotalLatency}" Width="80"/>
+                <DataGridTextColumn Header="AI 耗時 (II)" Binding="{Binding ModelLatency}" Width="80"/>
+                <DataGridTextColumn Header="處理 (III)" Binding="{Binding ProcessLatency}" Width="80"/>
+                <DataGridTextColumn Header="Tokens" Binding="{Binding TotalTokens}" Width="60"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <GridSplitter Grid.Row="1" Height="5" HorizontalAlignment="Stretch" Background="#EEE"/>
+
+        <Grid Grid.Row="2" DataContext="{Binding SelectedJob}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <GroupBox Header="User Prompt (字幕原文)" Margin="0,5,5,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding UserTokens, StringFormat='Tokens: {0}'}" FontWeight="Bold"/>
+                    <TextBox Text="{Binding UserPrompt}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" IsReadOnly="True" Background="#F9F9F9"/>
+                </DockPanel>
+            </GroupBox>
+
+            <GroupBox Grid.Column="1" Header="System Prompt (注入後)" Margin="5,5,0,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding SystemTokens, StringFormat='Tokens: {0}'}" FontWeight="Bold"/>
+                    <TextBox Text="{Binding SystemPrompt}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" IsReadOnly="True" Background="#F9F9F9"/>
+                </DockPanel>
+            </GroupBox>
+        </Grid>
+    </Grid>
+</UserControl>
