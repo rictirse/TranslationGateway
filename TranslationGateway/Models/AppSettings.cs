@@ -14,6 +14,9 @@ public class AppSettings
     public bool UseLocalModel { get; set; } = false;
     public string LastSelectedControlName { get; set; } = string.Empty;
     public string SystemInput { get; set; } = "";
-    public bool IsFakeMode = false;
+    /// <summary>
+    /// 打進來的訊號直接反射，不過處理
+    /// </summary>
+    public bool ThroughPass { get; set; } = false;
     public TranslationSettings TranslationSettings { get; set; } = new();
 }

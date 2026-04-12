@@ -2,6 +2,12 @@
 
 namespace TranslationGateway.Models;
 
+public class PotplayerRequest
+{
+    [JsonPropertyName("current")] public string Current { get; set; } = "";
+    [JsonPropertyName("context")] public string Context { get; set; } = "";
+}
+
 public class ChatCompletionRequest
 {
     [JsonPropertyName("model")] public string Model { get; set; } = "";

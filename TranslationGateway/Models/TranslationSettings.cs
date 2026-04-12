@@ -37,19 +37,15 @@ public class TranslationSettings
     /// </summary>
     public int MaxOutput { get; set; } = 2048;
 
-
-    // --- 翻譯微調 (影響翻譯品質與風格) ---
-
     /// <summary>
     /// 控制輸出的隨機性。
     /// 0.0 代表最精準、最穩定（適合翻譯）。
     /// 若想讓語氣更生動活潑，可微調至 0.2-0.3，但過高可能導致格式崩潰。
     /// </summary>
     public double Temperature { get; set; } = 0.0;
-
     /// <summary>
     /// 存放在地化專家指令的模板。
     /// 包含防幻覺標籤過濾、台灣口語風格定義等核心指令。
     /// </summary>
-    public string SystemPromptTemplate { get; set; } = "";
+    public string SystemPromptTemplate { get; set; } = string.Empty;
 }

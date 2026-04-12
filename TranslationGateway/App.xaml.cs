@@ -1,8 +1,13 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
+using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows;
 using TranslationGateway.Interface;
 using TranslationGateway.Logging;
@@ -28,6 +33,8 @@ public partial class App : Application
         {
             AppHost = BuildHost();
             await AppHost.StartAsync();
+
+            StartPotPlayerListener();
 
             // Load settings before showing UI
             var settingsSvc = AppHost.Services.GetRequiredService<ISettingsService>();
@@ -94,10 +101,6 @@ public partial class App : Application
                     .AddHttpMessageHandler<ApiLoggingHandler>();
 
                 services.AddSingleton<IOpenAiClient, OpenAiClient>();
-                //services.AddSingleton<ISubtitleTranslationEngine, SubtitleTranslationEngine>();
-
-                services.AddSingleton<MainViewModel>();
-                services.AddSingleton<MainWindow>();
             })
             .ConfigureLogging(logging =>
             {
@@ -118,5 +121,46 @@ public partial class App : Application
                 logging.AddProvider(new UiLoggerProvider(uiLogStore));
             })
             .Build();
+    }
+
+    private void StartPotPlayerListener()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.ConfigureKestrel(options => options.ListenLocalhost(5000));
+
+        var app = builder.Build();
+
+        app.MapPost("/v1/chat/completions", async (HttpContext context) =>
+        {
+            // 讓後面如果還想再讀一次 Body，也不會出問題
+            context.Request.EnableBuffering();
+
+            string rawBody;
+            using (var reader = new StreamReader(
+                context.Request.Body,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: false,
+                leaveOpen: true))
+            {
+                rawBody = await reader.ReadToEndAsync();
+                context.Request.Body.Position = 0;
+            }
+
+            Debug.WriteLine(rawBody);
+
+
+            var manager = AppHost.Services.GetRequiredService<TranslationManager>();
+            var potplayerRequest = await context.Request.ReadFromJsonAsync<PotplayerRequest>();
+            var translated = await manager.TranslateAsync(potplayerRequest);
+
+            return Results.Ok(new
+            {
+                choices = new[] {
+                new { message = new { role = "assistant", content = translated } }
+            }
+            });
+        });
+
+        _ = app.RunAsync();
     }
 }

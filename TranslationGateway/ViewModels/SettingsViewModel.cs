@@ -29,6 +29,7 @@ public partial class SettingsViewModel : ObservableObject
         IsLocalModel = cur.UseLocalModel;
         LastSelectedControlName = cur.LastSelectedControlName;
         SystemInput = cur.SystemInput;
+        IsThroughPass = cur.ThroughPass;
 
         // 從 TranslationSettings 載入
         MaxParallelism = cur.TranslationSettings.MaxParallelism;
@@ -39,6 +40,13 @@ public partial class SettingsViewModel : ObservableObject
         MaxOutput = cur.TranslationSettings.MaxOutput;
 
         SystemPromptTemplate = cur.TranslationSettings.SystemPromptTemplate;
+        if (string.IsNullOrWhiteSpace(SystemPromptTemplate))
+        {
+            var defaultTemplate = "你是一個專業的日文直播翻譯官，負責將日文語音轉寫的文字翻譯成繁體中文。\r\n\r\n語境理解：我會提供「完整語境(Context)」與「當前句子(Current)」。請參考語境來判斷主詞、性別與語氣，但僅需翻譯當前句子。\r\n\r\n口語優化：直播內容包含大量口語、口頭禪（如：草、w、あの、ええと），請將其轉化為自然流暢的社群語言或直接略過無意義贅詞。\r\n\r\n格式限制：直接輸出翻譯結果，不要包含任何解釋、拼音或原文。\r\n\r\n專有名詞：若遇到遊戲術語或 VTuber 相關梗，請保持原意或使用習慣譯名。";
+
+            cur.TranslationSettings.SystemPromptTemplate = defaultTemplate;
+            SystemPromptTemplate = defaultTemplate;
+        }
     }
 
     [RelayCommand]
@@ -51,6 +59,7 @@ public partial class SettingsViewModel : ObservableObject
         cur.UseLocalModel = IsLocalModel;
         cur.LastSelectedControlName = LastSelectedControlName;
         cur.SystemInput = SystemInput;
+        cur.ThroughPass = IsThroughPass;
 
         // 更新翻譯子項目
         cur.TranslationSettings.MaxParallelism = MaxParallelism;

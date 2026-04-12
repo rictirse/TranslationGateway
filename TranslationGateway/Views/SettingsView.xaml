@@ -40,7 +40,10 @@
                           Margin="5,0,0,0" Padding="8,2" />
                     </StackPanel>
 
-                    <CheckBox Content="Use Local Model" IsChecked="{Binding IsLocalModel}" Grid.Row="2" Grid.Column="1"/>
+                    <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
+                        <CheckBox Content="Use Local Model" IsChecked="{Binding IsLocalModel}"/>
+                        <CheckBox Content="Use ThroughPass" IsChecked="{Binding IsThroughPass}" Margin="10,0,0,0"/>
+                    </StackPanel>
                 </Grid>
             </GroupBox>
             <GroupBox Header="Translation Engine &amp; Limits" Margin="0,0,0,15" Padding="10">

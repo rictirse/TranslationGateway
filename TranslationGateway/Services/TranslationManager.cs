@@ -24,17 +24,24 @@ public class TranslationManager
         _textService = textService;
     }
 
-
-    public async Task<string> TranslateAsync(string userContent)
+    public async Task<string> TranslateAsync(PotplayerRequest? request)
     {
+        if (request is null ) return string.Empty;
+
+        string userPrompt = 
+            $"# Context (僅供參考，不要翻譯這裡的內容)\n" + 
+            $"{request.Context}\n" +
+            $"請翻譯下面這句話。注意：只需要輸出這句話的翻譯結果，嚴禁包含上面的歷史紀錄。\n" +
+            $"{request.Current}\n" +
+            $"# Output (直接輸出繁體中文翻譯)";
+
         var s = _settings.Current;
         var job = new TranslationJob
         {
-            UserPrompt = userContent,
-            // 更新為新的路徑
-            SystemPrompt = s.IsFakeMode
-                ? "FAKE MODE"
-                : s.TranslationSettings.SystemPromptTemplate
+            Current = request.Current,
+            Context = request.Context,
+            UserPrompt = userPrompt,
+            SystemPrompt = s.TranslationSettings.SystemPromptTemplate
         };
 
         var swTotal = Stopwatch.StartNew();
@@ -42,23 +49,22 @@ public class TranslationManager
         string result = string.Empty;
         long modelTime = 0;
 
-        if (s.IsFakeMode)
+        if (s.ThroughPass) 
         {
-            // Fake Mode: 模擬一點點延遲並直接回傳原文
             await Task.Delay(10);
-            result = userContent;
+            result = request.Current;
             modelTime = 10;
         }
         else
         {
             // 1. 先查 SQLite 快取
-            var cached = _db.GetCache(userContent);
+            var cached = _db.GetCache(userPrompt);
             if (cached != null)
             {
                 // 發送一個 "Cache Hit" 的 Job 到 UI，讓用戶知道這是快取回傳的
                 WeakReferenceMessenger.Default.Send(new TranslationJob
                 {
-                    UserPrompt = userContent,
+                    UserPrompt = userPrompt,
                     TranslatedText = cached,
                     ModelLatency = 0, // 快取命中，模型耗時為 0
                     SystemPrompt = "CACHED"
@@ -87,11 +93,9 @@ public class TranslationManager
         job.ProcessLatency = swProcess.ElapsedMilliseconds;
         job.TotalLatency = swTotal.ElapsedMilliseconds;
         job.TranslatedText = processedResult;
-
-        // [建議新增]：將成功的結果存入快取，供下次使用
-        if (!s.IsFakeMode) // Fake Mode 通常不存快取，避免污染
+        if (!s.ThroughPass)
         {
-            _db.SaveCache(userContent, processedResult);
+            _db.SaveCache(request.Current, processedResult);
         }
 
         // 更新 UI
