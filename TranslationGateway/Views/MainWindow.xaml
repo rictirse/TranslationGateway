@@ -18,6 +18,7 @@
             <Button Content="Chat Sandbox" Command="{Binding NavigateCommand}" CommandParameter="Chat" Margin="5"/>
             <Button Content="Knowledge" Command="{Binding NavigateCommand}" CommandParameter="Knowledge" Margin="5"/>
             <Button Content="Log" Command="{Binding NavigateCommand}" CommandParameter="Log" Margin="5"/>
+            <CheckBox Content="Use ThroughPass" IsChecked="{Binding UseThroughPass, Mode=TwoWay}" Margin="5" />
         </StackPanel>
 
         <ContentControl Grid.Column="1" Content="{Binding CurrentView}">

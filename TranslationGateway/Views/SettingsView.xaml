@@ -42,7 +42,6 @@
 
                     <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
                         <CheckBox Content="Use Local Model" IsChecked="{Binding IsLocalModel}"/>
-                        <CheckBox Content="Use ThroughPass" IsChecked="{Binding IsThroughPass}" Margin="10,0,0,0"/>
                     </StackPanel>
                 </Grid>
             </GroupBox>

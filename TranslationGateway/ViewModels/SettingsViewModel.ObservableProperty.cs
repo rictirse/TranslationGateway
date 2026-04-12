@@ -63,7 +63,4 @@ public partial class SettingsViewModel
 
     [ObservableProperty]
     private string systemPromptTemplate = "";
-
-    [ObservableProperty]
-    private bool isThroughPass;
 }

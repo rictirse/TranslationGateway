@@ -11,10 +11,8 @@ public partial class ChatViewModel : ObservableObject
 
     [ObservableProperty]
     private string _systemInput = string.Empty;
-
     [ObservableProperty]
     private string _chatInput = string.Empty;
-
     [ObservableProperty]
     private string _chatOutput = string.Empty;
 
@@ -24,6 +22,13 @@ public partial class ChatViewModel : ObservableObject
     {
         _llmClient = llmClient;
         _settings = settings;
+        _systemInput = settings.Current.TranslationSettings.SystemPromptTemplate;
+    }
+
+    partial void OnSystemInputChanged(string value)
+    {
+        _settings.Current.TranslationSettings.SystemPromptTemplate = value;
+        _ = _settings.SaveAsync();
     }
 
     [RelayCommand]

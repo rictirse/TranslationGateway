@@ -13,7 +13,6 @@ public class AppSettings
     /// </summary>
     public bool UseLocalModel { get; set; } = false;
     public string LastSelectedControlName { get; set; } = string.Empty;
-    public string SystemInput { get; set; } = "";
     /// <summary>
     /// 打進來的訊號直接反射，不過處理
     /// </summary>

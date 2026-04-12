@@ -15,12 +15,12 @@
                   AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
                   VerticalScrollBarVisibility="Auto">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="時間" Binding="{Binding Timestamp, StringFormat=\{0:HH:mm:ss\}}" Width="70"/>
+                <DataGridTextColumn Header="時間" Binding="{Binding Timestamp, StringFormat=\{0:HH:mm:ss\}}" Width="65"/>
                 <DataGridTextColumn Header="原文" Binding="{Binding Current}" Width="*"/>
                 <DataGridTextColumn Header="翻譯" Binding="{Binding TranslatedText}" Width="*"/>
-                <DataGridTextColumn Header="總耗時" Binding="{Binding TotalLatency}" Width="70"/>
-                <DataGridTextColumn Header="AI 耗時" Binding="{Binding ModelLatency}" Width="70"/>
-                <DataGridTextColumn Header="處理" Binding="{Binding ProcessLatency}" Width="70"/>
+                <DataGridTextColumn Header="總耗時" Binding="{Binding TotalLatency}" Width="50"/>
+                <DataGridTextColumn Header="AI 耗時" Binding="{Binding ModelLatency}" Width="50"/>
+                <DataGridTextColumn Header="處理" Binding="{Binding ProcessLatency}" Width="50"/>
                 <DataGridTextColumn Header="tok" Binding="{Binding TotalTokens}" Width="50"/>
             </DataGrid.Columns>
         </DataGrid>

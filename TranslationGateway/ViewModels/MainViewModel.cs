@@ -13,6 +13,7 @@ public partial class MainViewModel : ObservableObject
     private readonly ILogger<MainViewModel> _logger;
 
     [ObservableProperty] private object? _currentView;
+    [ObservableProperty] private bool useThroughPass;
 
     // 透過 DI 注入 ServiceProvider 與 SettingsService
     public MainViewModel(
@@ -33,13 +34,19 @@ public partial class MainViewModel : ObservableObject
         _logger = logger;
     }
 
+    partial void OnUseThroughPassChanged(bool value)
+    {
+        _settingsService.Current.ThroughPass = value;
+        _settingsService.SaveAsync(); 
+    }
+
     [RelayCommand]
     private void Navigate(string destination)
     {
         //離開設定畫面先存檔
-        if (_settingsService.Current.LastSelectedControlName == "Settings")
+        if (CurrentView is SettingsViewModel)
         {
-            _settingsService.SaveAsync().ConfigureAwait(false).GetAwaiter();
+            ((SettingsViewModel)CurrentView).SaveSettingsCommand.Execute(null);
         }
 
         CurrentView = destination switch

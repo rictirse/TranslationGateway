@@ -28,8 +28,6 @@ public partial class SettingsViewModel : ObservableObject
         Model = cur.Model;
         IsLocalModel = cur.UseLocalModel;
         LastSelectedControlName = cur.LastSelectedControlName;
-        SystemInput = cur.SystemInput;
-        IsThroughPass = cur.ThroughPass;
 
         // 從 TranslationSettings 載入
         MaxParallelism = cur.TranslationSettings.MaxParallelism;
@@ -58,8 +56,6 @@ public partial class SettingsViewModel : ObservableObject
         cur.Model = Model;
         cur.UseLocalModel = IsLocalModel;
         cur.LastSelectedControlName = LastSelectedControlName;
-        cur.SystemInput = SystemInput;
-        cur.ThroughPass = IsThroughPass;
 
         // 更新翻譯子項目
         cur.TranslationSettings.MaxParallelism = MaxParallelism;
