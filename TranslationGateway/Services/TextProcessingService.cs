@@ -1,4 +1,6 @@
-﻿using TranslationGateway.Interface;
+﻿using Microsoft.International.Converters.TraditionalChineseToSimplifiedConverter;
+using System.Text.RegularExpressions;
+using TranslationGateway.Interface;
 
 namespace TranslationGateway.Services;
 
@@ -8,10 +10,13 @@ public class TextProcessingService : ITextProcessingService
     {
         if (string.IsNullOrWhiteSpace(input)) return input;
 
-        // 這裡目前先放簡易邏輯，之後可以直接在此集成 OpenCC 庫
-        var result = input.Replace("帮忙", "幫忙");
+        var result = input.Trim();
 
-        // 也可以加入其他通用的過濾邏輯
+        if (Regex.IsMatch(input, @"[\u4e00-\u9fa5]"))
+        {
+            result = ChineseConverter.Convert(input, ChineseConversionDirection.SimplifiedToTraditional);
+        }
+
         result = result.Trim();
 
         return result;
