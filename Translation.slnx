@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Bridge.Core/Bridge.Core.csproj" Id="890d6117-6d2f-458b-be28-118eb838cd58" />
+  <Project Path="Bridge/Bridge.csproj" Id="9092722d-7c96-4ae0-80fd-003f338b145f" />
+  <Project Path="Gateway/Gateway.csproj" />
+</Solution>
