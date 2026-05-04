@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenCCNET;
 using Serilog;
 using System.Diagnostics;
 using System.IO;
@@ -29,6 +30,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        ZhConverter.Initialize(segmentMode: SegmentMode.Jieba);
         try
         {
             AppHost = BuildHost();

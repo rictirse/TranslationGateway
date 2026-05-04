@@ -1,55 +1,40 @@
 ﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using Translation.Bridge.Core.Interface;
 
 namespace Translation.Gateway.ViewModels;
 
 public partial class ChatViewModel : ObservableObject
 {
-    private readonly IOpenAiClient _llmClient;
+    private readonly IOpenAiClient _openAiClient;
     private readonly ISettingsService _settings;
-
-    [ObservableProperty]
-    private string _systemInput = string.Empty;
-    [ObservableProperty]
-    private string _chatInput = string.Empty;
-    [ObservableProperty]
-    private string _chatOutput = string.Empty;
+    private readonly ITextProcessingService _textProcessingService;
+    private readonly ILogger<ChatViewModel> _logger;
 
     public ChatViewModel(
         IOpenAiClient llmClient,
-        ISettingsService settings)
+        ISettingsService settings,
+        ITextProcessingService novelTextProcessor,
+        ILogger<ChatViewModel> logger)
     {
-        _llmClient = llmClient;
+        _openAiClient = llmClient;
         _settings = settings;
-        _systemInput = settings.Current.TranslationSettings.SystemPromptTemplate;
+        _textProcessingService = novelTextProcessor;
+        _logger = logger;
+        _systemInput = settings.Current.Translation.SystemPromptTemplate;
+        _currentModel = settings.Current.Translation.Model;
     }
 
     partial void OnSystemInputChanged(string value)
     {
-        _settings.Current.TranslationSettings.SystemPromptTemplate = value;
+        _settings.Current.Translation.SystemPromptTemplate = value;
         _ = _settings.SaveAsync();
     }
 
-    [RelayCommand]
-    private async Task SendChat()
+    partial void OnCurrentModelChanged(string value)
     {
-        if (string.IsNullOrWhiteSpace(ChatInput)) return;
-
-        string currentInput = ChatInput;
-
-        try
-        {
-            var chatResult = await _llmClient.SendAsync(
-                currentInput,
-                SystemInput,
-                CancellationToken.None
-            );
-            ChatOutput = chatResult.Content;
-        }
-        catch (Exception ex)
-        {
-            ChatOutput = $"[Error]: {ex.Message}";
-        }
+        _settings.Current.Translation.Model = value;
+        _ = _settings.SaveAsync();
     }
+
 }

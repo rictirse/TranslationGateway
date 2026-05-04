@@ -26,7 +26,7 @@ public class TranslationManager
 
     public async Task<string> TranslateAsync(PotplayerRequest? request)
     {
-        if (request is null ) return string.Empty;
+        if (request is null) return string.Empty;
 
         string userPrompt = 
             $"# Context (僅供參考，不要翻譯這裡的內容)\n" + 
@@ -41,7 +41,7 @@ public class TranslationManager
             Current = request.Current,
             Context = request.Context,
             UserPrompt = userPrompt,
-            SystemPrompt = s.TranslationSettings.SystemPromptTemplate
+            SystemPrompt = s.Translation.SystemPromptTemplate
         };
 
         var swTotal = Stopwatch.StartNew();
@@ -87,7 +87,7 @@ public class TranslationManager
 
         // 後處理 (Fake Mode 也可以跑，測試過濾邏輯)
         var swProcess = Stopwatch.StartNew();
-        var processedResult = _textService.Process(result);
+        var processedResult = _textService.PostProcess(result, request.Current);
         swProcess.Stop();
 
         job.ProcessLatency = swProcess.ElapsedMilliseconds;

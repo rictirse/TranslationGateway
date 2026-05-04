@@ -1,7 +1,14 @@
-﻿namespace Translation.Bridge.Core.Models;
-
-public class TranslationSettings
+﻿public class TranslationSettings
 {
+    public string ApiHost { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public string ChatCompletionsPath { get; set; } = string.Empty;
+    public string? ApiKey { get; set; } = null;
+    /// <summary>
+    /// 是否使用本地模型
+    /// </summary>
+    public bool UseLocalModel { get; set; } = false;
+
     // --- 效能參數 (影響翻譯速度與 GPU 負載) ---
 
     /// <summary>
@@ -37,6 +44,9 @@ public class TranslationSettings
     /// </summary>
     public int MaxOutput { get; set; } = 2048;
 
+
+    // --- 翻譯微調 (影響翻譯品質與風格) ---
+
     /// <summary>
     /// 控制輸出的隨機性。
     /// 0.0 代表最精準、最穩定（適合翻譯）。
@@ -47,5 +57,9 @@ public class TranslationSettings
     /// 存放在地化專家指令的模板。
     /// 包含防幻覺標籤過濾、台灣口語風格定義等核心指令。
     /// </summary>
-    public string SystemPromptTemplate { get; set; } = string.Empty;
+    public string SystemPromptTemplate { get; set; } = "";
+    /// <summary>
+    /// 翻譯失敗重試次數上限。
+    /// </summary>
+    public int MaxRetry { get; set; } = 1;
 }

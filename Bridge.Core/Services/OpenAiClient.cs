@@ -30,14 +30,14 @@ public class OpenAiClient : IOpenAiClient
         CancellationToken cancellationToken)
     {
         var s = _settings.Current;
-        var host = s.UseLocalModel
-            ? "http://localhost:11434"
-            : s.ApiHost;
-        var url = BuildChatCompletionsUrl(host, s.ChatCompletionsPath);
+        var host = s.Translation.UseLocalModel
+            ? "http://localhost:1234"
+            : s.Translation.ApiHost;
+        var url = BuildChatCompletionsUrl(host, s.Translation.ChatCompletionsPath);
 
         var payload = new
         {
-            model = s.Model,
+            model = s.Translation.Model,
             temperature = 0,
             stream = false,
             messages = new object[]
@@ -54,8 +54,8 @@ public class OpenAiClient : IOpenAiClient
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
 
-        if (!string.IsNullOrWhiteSpace(s.ApiKey))
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", s.ApiKey);
+        if (!string.IsNullOrWhiteSpace(s.Translation.ApiKey))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", s.Translation.ApiKey);
 
         var http = _httpFactory.CreateClient("openai");
 

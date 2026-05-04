@@ -40,7 +40,7 @@ public class SettingsService : ISettingsService
             var obj = JsonSerializer.Deserialize<AppSettings>(json, _jsonOptions);
             if (obj is not null) Current = obj;
 
-            _logger.LogInformation("Settings loaded: host={Host}, model={Model}", Current.ApiHost, Current.Model);
+            _logger.LogInformation("Settings loaded: host={Host}, model={Model}", Current.Translation.ApiHost, Current.Translation.Model);
         }
         catch (Exception ex)
         {
