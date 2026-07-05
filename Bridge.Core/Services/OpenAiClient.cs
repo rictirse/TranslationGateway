@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json;
+using OpenAI;
+using OpenAI.Chat;
+using System.ClientModel.Primitives;
 using Translation.Bridge.Core.Interface;
 using Translation.Bridge.Core.Models;
 
@@ -9,17 +9,16 @@ namespace Translation.Bridge.Core.Services;
 
 public class OpenAiClient : IOpenAiClient
 {
-    private readonly IHttpClientFactory _httpFactory;
     private readonly ISettingsService _settings;
     private readonly ILogger<OpenAiClient> _logger;
-    private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private readonly OpenAIClient _openAiClient;
 
     public OpenAiClient(
-        IHttpClientFactory httpFactory, 
-        ISettingsService settings, 
+        OpenAIClient openAiClient,
+        ISettingsService settings,
         ILogger<OpenAiClient> logger)
     {
-        _httpFactory = httpFactory;
+        _openAiClient = openAiClient;
         _settings = settings;
         _logger = logger;
     }
@@ -30,70 +29,54 @@ public class OpenAiClient : IOpenAiClient
         CancellationToken cancellationToken)
     {
         var s = _settings.Current;
-        var host = s.Translation.UseLocalModel
-            ? "http://localhost:1234"
-            : s.Translation.ApiHost;
-        var url = BuildChatCompletionsUrl(host, s.Translation.ChatCompletionsPath);
 
-        var payload = new
+        ChatClient chatClient = _openAiClient.GetChatClient(s.Translation.Model);
+
+        List<ChatMessage> messages = new()
         {
-            model = s.Translation.Model,
-            temperature = 0,
-            stream = false,
-            messages = new object[]
+            new SystemChatMessage(systemText),
+            new UserChatMessage(userText)
+        };
+
+        // 3. 設定參數 (例如 Temperature)
+        ChatCompletionOptions options = new()
+        {
+            Temperature = 0f, // 注意：新版 SDK 是 float
+            MaxOutputTokenCount = 1024 // 💡 新版 SDK 的 max_tokens 改名為 MaxOutputTokenCount
+        };
+
+        // 2. 萬用破玻璃解法：完全關閉思考
+        // 透過 IJsonModel 強制將 "none" 寫入發送至 API 的底層 json payload
+        options = ((IJsonModel<ChatCompletionOptions>)options).Create(
+            new BinaryData("""
             {
-                new { role = "system", content = systemText },
-                new { role = "user", content = userText }
+                "reasoning_effort": "none",
+                "max_completion_tokens": 1024
             }
-        };
+            """),
+            ModelReaderWriterOptions.Json
+        );
 
-        var json = JsonSerializer.Serialize(payload);
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, url)
+        try
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
+            // 4. 發送請求
+            ChatCompletion completion = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
 
-        if (!string.IsNullOrWhiteSpace(s.Translation.ApiKey))
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", s.Translation.ApiKey);
+            // 5. 解析回應 (SDK 已經幫你轉成強型別物件了)
+            string msg = completion.Content?[0]?.Text ?? "";
+            var usage = completion.Usage;
 
-        var http = _httpFactory.CreateClient("openai");
-
-        using var resp = await http.SendAsync(req, cancellationToken);
-        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!resp.IsSuccessStatusCode)
-        {
-            _logger.LogWarning("Chat completion failed: {StatusCode} {Body}", (int)resp.StatusCode, body);
-            resp.EnsureSuccessStatusCode();
+            return new ChatResult(
+                Content: msg,
+                PromptTokens: usage?.InputTokenCount,     // 修正為 InputTokenCount
+                CompletionTokens: usage?.OutputTokenCount, // 修正為 OutputTokenCount
+                TotalTokens: usage?.TotalTokenCount,       // 修正為 TotalTokenCount
+                Model: completion.Model);
         }
-
-        var dto = JsonSerializer.Deserialize<OpenAiChatCompletionResponse>(body, _jsonOptions);
-        var msg = dto?.Choices?.Length > 0 ? dto.Choices[0].Message?.Content ?? "" : "";
-        var usage = dto?.Usage;
-
-        return new ChatResult(
-            Content: msg,
-            PromptTokens: usage?.PromptTokens,
-            CompletionTokens: usage?.CompletionTokens,
-            TotalTokens: usage?.TotalTokens,
-            Model: dto?.Model);
-    }
-
-    internal static string BuildChatCompletionsUrl(string apiHost, string path)
-    {
-        var host = (apiHost ?? "").Trim().TrimEnd('/');
-        var p = (path ?? "").Trim();
-
-        if (string.IsNullOrWhiteSpace(p)) p = "/v1/chat/completions";
-        if (!p.StartsWith('/')) p = "/" + p;
-
-        if (host.Contains("/v1/chat/completions", StringComparison.OrdinalIgnoreCase))
-            return host;
-
-        if (host.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) && p.StartsWith("/v1/", StringComparison.OrdinalIgnoreCase))
-            p = p.Substring(3);
-
-        return host + p;
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Chat completion failed via OpenAI SDK.");
+            throw;
+        }
     }
 }

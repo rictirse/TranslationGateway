@@ -11,8 +11,12 @@ public class UiLogStore
     {
         Action addAction = () =>
         {
-            Items.Add(new UiLogItem(DateTime.Now, level, category, message));
-            if (Items.Count > 500) Items.RemoveAt(0);
+            Items.Insert(0, new UiLogItem(DateTime.Now, level, category, message));
+
+            if (Items.Count > 500)
+            {
+                Items.RemoveAt(Items.Count - 1);
+            }
         };
 
         if (Application.Current?.Dispatcher is { } dispatcher)

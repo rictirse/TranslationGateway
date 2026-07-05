@@ -39,7 +39,7 @@ public class TranslationManager
         var job = new TranslationJob
         {
             Current = request.Current,
-            Context = request.Context,
+            Context = string.Join("\n", request.Context),
             UserPrompt = userPrompt,
             SystemPrompt = s.Translation.SystemPromptTemplate
         };

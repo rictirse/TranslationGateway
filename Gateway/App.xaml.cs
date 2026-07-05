@@ -4,11 +4,11 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenAI;
 using OpenCCNET;
 using Serilog;
-using System.Diagnostics;
+using System.ClientModel;
 using System.IO;
-using System.Text;
 using System.Windows;
 using Translation.Bridge.Core.Interface;
 using Translation.Bridge.Core.Models;
@@ -100,10 +100,50 @@ public partial class App : Application
 
                 services.AddTransient<ApiLoggingHandler>();
                 services.AddTransient<SettingsViewModel>(); 
-                services.AddTransient<KnowledgeViewModel>(); 
+                services.AddTransient<KnowledgeViewModel>();
+                services.AddTransient<OpenAIClient>(sp =>
+                {
+                    var settingsService = sp.GetRequiredService<ISettingsService>();
+                    var s = settingsService.Current;
 
-                services.AddHttpClient("openai")
-                    .AddHttpMessageHandler<ApiLoggingHandler>();
+                    // 1. 決定基礎 Host
+                    var host = s.Translation.UseLocalModel
+                        ? "http://192.168.81.50:11434" // 或是從原本設定讀取
+                        : s.Translation.ApiHost;
+
+                    host = (host ?? "").Trim().TrimEnd('/');
+
+                    // 💡 防呆 1：如果字串內含有完整的 /chat/completions，直接把它切掉
+                    if (host.Contains("/chat/completions", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int index = host.IndexOf("/chat/completions", StringComparison.OrdinalIgnoreCase);
+                        host = host.Substring(0, index).TrimEnd('/');
+                    }
+
+                    // 💡 防呆 2 (關鍵)：如果是打本地模型(如 Ollama)，網址必須要到 /v1 階層
+                    // 如果結尾不是 /v1，就自動幫它補上 /v1
+                    if (!host.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        host = host + "/v1";
+                    }
+
+                    // 確保有 http:// 或 https:// 前綴
+                    if (!host.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                        !host.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        host = "http://" + host;
+                    }
+
+                    var apiKey = string.IsNullOrWhiteSpace(s.Translation.ApiKey) ? "no-key-needed" : s.Translation.ApiKey;
+
+                    var options = new OpenAIClientOptions
+                    {
+                        // 此時 parsedUri 會是 http://192.168.81.50:11434/v1
+                        Endpoint = new Uri(host)
+                    };
+
+                    return new OpenAIClient(new ApiKeyCredential(apiKey), options);
+                });
 
                 services.AddSingleton<IOpenAiClient, OpenAiClient>();
             })
@@ -135,24 +175,24 @@ public partial class App : Application
 
         var app = builder.Build();
 
-        app.MapPost("/v1/chat/completions", async (HttpContext context) =>
+        app.MapPost("/translate", async (HttpContext context) =>
         {
-#if DEBUG
-            context.Request.EnableBuffering();
+//#if DEBUG
+//            context.Request.EnableBuffering();
 
-            string rawBody;
-            using (var reader = new StreamReader(
-                context.Request.Body,
-                Encoding.UTF8,
-                detectEncodingFromByteOrderMarks: false,
-                leaveOpen: true))
-            {
-                rawBody = await reader.ReadToEndAsync();
-                context.Request.Body.Position = 0;
-            }
+//            string rawBody;
+//            using (var reader = new StreamReader(
+//                context.Request.Body,
+//                Encoding.UTF8,
+//                detectEncodingFromByteOrderMarks: false,
+//                leaveOpen: true))
+//            {
+//                rawBody = await reader.ReadToEndAsync();
+//                context.Request.Body.Position = 0;
+//            }
 
-            Debug.WriteLine(rawBody);
-#endif
+//            Debug.WriteLine(rawBody);
+//#endif
             var manager = AppHost.Services.GetRequiredService<TranslationManager>();
             var potplayerRequest = await context.Request.ReadFromJsonAsync<PotplayerRequest>();
             var translated = await manager.TranslateAsync(potplayerRequest);
@@ -166,5 +206,16 @@ public partial class App : Application
         });
 
         _ = app.RunAsync();
+    }
+
+    private static Uri BuildBaseUri(string apiHost, string path)
+    {
+        var host = (apiHost ?? "").Trim().TrimEnd('/');
+        if (!host.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !host.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            host = "http://" + host;
+        }
+        return new Uri(host);
     }
 }
