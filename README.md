@@ -1,437 +1,169 @@
-# PotPlayer to Local AI Gateway Bridge
-
-Why Use a Local AI Gateway?
-While PotPlayer supports AngelScript (AS) for extensions, relying solely on AS for complex AI translations presents several challenges. This project implements a C# Gateway (Bridge.Core) to act as a robust middleware, offering the following advantages:
-
-1. Overcoming AngelScript Limitations
-Developer Experience: The AngelScript environment in PotPlayer is notoriously difficult to debug and maintain. It lacks modern IDE support and comprehensive error logging, making it hard to trace complex issues.
-
-Performance & Stability: Offloading logic to a C# Gateway keeps the PotPlayer UI responsive. C# handles asynchronous tasks and network I/O much more efficiently, preventing the player from hanging due to translation timeouts or backend delays.
-
-2. Advanced Processing Pipeline
-Pre-processing: Clean up artifacts and "hallucinations" common in speech-to-text models (like Whisper), handle Japanese honorifics, or merge fragmented subtitle lines before they reach the LLM.
-
-Post-processing: Apply custom formatting, perform Traditional Chinese conversion (OpenCC), or execute regex-based terminology correction to ensure subtitle consistency.
-
-Knowledge Integration (MCP): The Gateway can interface with the Model Context Protocol (MCP) or local knowledge bases. This allows the AI to reference specific series-specific glossaries, ensuring highly accurate, context-aware translations.
-
-3. Extensibility
-Moving the core logic to C# allows you to easily switch between different LLM backends (Ollama, vLLM, or local APIs) or upgrade the translation pipeline without ever touching the PotPlayer script again.
-
-This guide provides instructions on how to set up the **PotPlayer AngelScript (AS)** extension to send subtitle data as JSON to a local C# Gateway for AI processing.
-
----
-
-## 1. Architecture Overview
-
-* **PotPlayer**: Captures Japanese subtitles from live streams or video files.
-* **AngelScript (AS)**: Intercepts the subtitle strings and encapsulates them into a JSON payload.
-* **C# Gateway (Bridge.Core)**: A local web server that receives JSON requests and interfaces with local LLMs for translation.
-
----
-
-## 2. Deployment
-
-Place the following files into your PotPlayer extension directory:
-
-* **Path**: `C:\Program Files\DAUM\PotPlayer\Extension\Subtitle\Translate\`
-* **Required Files**:
-    * `TranslationBridge.as`: The script logic.
-    * `TranslationBridge.ico`: Icon for the selection menu.
-
-> **Note**: Ensure the `.as` file is saved with **UTF-8 with BOM** encoding to prevent Japanese character corruption.
-
----
-
-## 3. AngelScript Implementation
-
-The script uses PotPlayer's internal HTTP functions to POST data to the local gateway (default: `http://127.0.0.1:5000/translate`).
----
-
-## 4. PotPlayer Configuration
-
-1.  **Open Preferences**: Press `F5` in PotPlayer.
-2.  **Navigate to Translation**: Go to `Extensions` -> `Real-time Translation`.
-3.  **Select Engine**: 
-    * Choose **"Translation Bridge (Local Gateway)"** from the Translation Engine dropdown.
-    * Set "Usage" to **"Always use"**.
-4.  **Language Selection**:
-    * Source: `Japanese`
-    * Target: `Traditional Chinese`
-5.  **Verify**: Play a video with Japanese subtitles and check the C# Gateway console for incoming JSON logs.
-
-```angelscript
-// ============================================================
-// PotPlayer Translation Gateway Connector
-// Description:
-// 1. Assumes the gateway is a self-hosted service; does not assume OpenAI API structure.
-// 2. No login validation, no API Key check, and no automatic endpoint suffixing.
-// 3. The POST request is sent directly to the Gateway URL provided by the user.
-// 4. Includes "Non-blocking Connection Probing": Used only to observe if the gateway responds.
-//    - Does not affect login success status.
-//    - Does not require a fixed JSON structure.
-//    - Prints test results only during initialization or before the first translation.
-// ============================================================
-
-// Browser User-Agent
-string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
-
-// User-defined gateway URL
-string GatewayUrl = "";
-
-// Tracks if the gateway probe has been performed to avoid repeated testing for every subtitle
-bool GatewayProbeDone = false;
-
-// Stores subtitle history to provide context for the gateway
-array<string> subtitleHistory;
-
-// Language list (can be expanded as needed)
-array<string> LangTable = { "zh-TW", "ja", "en" };
-
-// ------------------------------------------------------------
-// Plugin Basic Information
-// ------------------------------------------------------------
-string GetTitle() { return "PotPlayer Gateway Connector"; }
-string GetVersion() { return "2.4"; }
-string GetDesc() { return "Connects PotPlayer to a self-hosted translation gateway with context support."; }
-
-// ------------------------------------------------------------
-// PotPlayer Settings Window Text
-// ------------------------------------------------------------
-string GetLoginTitle() { return "Gateway Setup"; }
-string GetLoginDesc() { return "Input your gateway URL. This connector will POST directly to the URL you provide."; }
-string GetUserText() { return "Gateway URL"; }
-string GetPasswordText() { return ""; }
-
-// ------------------------------------------------------------
-// Configuration Storage / Loading Utilities
-// ------------------------------------------------------------
-string BuildConfigSentinel(const string &in key) {
-    return "#__POTPLAYER_CFG_UNSET__#" + key + "#__";
-}
-
-string LoadStoredConfig(const string &in key, const string &in fallbackValue) {
-    string sentinel = BuildConfigSentinel(key);
-    string storedValue = HostLoadString(key, sentinel);
-    if (storedValue == sentinel)
-        return fallbackValue;
-    return storedValue;
-}
-
-void RefreshConfiguration() {
-    GatewayUrl = LoadStoredConfig("gateway_url", "");
-}
-
-// ------------------------------------------------------------
-// URL Normalization
-// Minimal processing:
-// 1. Trim whitespace.
-// 2. Default to http:// if no protocol is specified.
-// 3. Keep the user's original path; do not auto-append endpoints.
-// ------------------------------------------------------------
-string NormalizeGatewayUrl(string inputUrl) {
-    string url = inputUrl.Trim();
-    if (url.empty())
-        return "";
-
-    if (url.findFirst("http://") != 0 && url.findFirst("https://") != 0)
-        url = "http://" + url;
-
-    return url;
-}
-
-// ------------------------------------------------------------
-// JSON Escape helper
-// ------------------------------------------------------------
-string JsonEscape(string Text) {
-    Text.replace("\\", "\\\\");
-    Text.replace("\"", "\\\"");
-    Text.replace("\n", "\\n");
-    Text.replace("\r", "\\r");
-    Text.replace("\t", "\\t");
-    return Text;
-}
-
-// ------------------------------------------------------------
-// Build Translation Request JSON
-// Description:
-// - current: The current subtitle line.
-// - context: Previous lines + current line.
-// ------------------------------------------------------------
-string BuildTranslatePayload(const string &in currentText, const string &in fullContext) {
-    return "{"
-         + "\"current\":\"" + JsonEscape(currentText) + "\"," 
-         + "\"context\":\"" + JsonEscape(fullContext) + "\""
-         + "}";
-}
-
-// ------------------------------------------------------------
-// Build Connection Probe JSON
-// Description:
-// - Uses the same format as translation to verify the path is functional.
-// ------------------------------------------------------------
-string BuildProbePayload() {
-    string sample = "Subtitle translation test. PotPlayer can support online translation.";
-    return BuildTranslatePayload(sample, sample);
-}
-
-// ------------------------------------------------------------
-// Attempt to extract translation from gateway response
-// Supports various formats:
-// 1. {"translation":"..."}
-// 2. {"translatedText":"..."}
-// 3. {"content":"..."}
-// 4. {"text":"..."}
-// 5. OpenAI style {"choices":[{"message":{"content":"..."}}]}
-// 6. If not valid JSON, returns the raw response.
-// ------------------------------------------------------------
-bool TryExtractTranslation(const string &in response, string &out translatedText, string &out errorText) {
-    translatedText = "";
-    errorText = "";
-
-    if (response.empty()) {
-        errorText = "Gateway returned empty response.";
-        return false;
-    }
-
-    JsonReader reader;
-    JsonValue root;
-
-    // If not JSON, treat the whole response as the translation result
-    if (!reader.parse(response, root)) {
-        translatedText = response;
-        return true;
-    }
-
-    // If JSON but not an object, return the whole text
-    if (!root.isObject()) {
-        translatedText = response;
-        return true;
-    }
-
-    // Common field 1: translation
-    JsonValue translation = root["translation"];
-    if (translation.isString()) {
-        translatedText = translation.asString();
-        return true;
-    }
-
-    // Common field 2: translatedText
-    JsonValue translated = root["translatedText"];
-    if (translated.isString()) {
-        translatedText = translated.asString();
-        return true;
-    }
-
-    // Common field 3: content
-    JsonValue content = root["content"];
-    if (content.isString()) {
-        translatedText = content.asString();
-        return true;
-    }
-
-    // Common field 4: text
-    JsonValue text = root["text"];
-    if (text.isString()) {
-        translatedText = text.asString();
-        return true;
-    }
-
-    // Compatibility for OpenAI-like structures
-    JsonValue choices = root["choices"];
-    if (choices.isArray() && choices.size() > 0) {
-        JsonValue firstChoice = choices[0];
-        JsonValue message = firstChoice["message"];
-        if (message.isObject() && message["content"].isString()) {
-            translatedText = message["content"].asString();
-            return true;
-        }
-    }
-
-    // Check for error messages to assist debugging
-    JsonValue errorObj = root["error"];
-    if (errorObj.isObject() && errorObj["message"].isString()) {
-        errorText = errorObj["message"].asString();
-        return false;
-    }
-
-    // Fallback: return raw response if no known fields are found
-    translatedText = response;
-    return true;
-}
-
-// ------------------------------------------------------------
-// Non-blocking Gateway Probe
-// ------------------------------------------------------------
-void ProbeGatewayOnce() {
-    if (GatewayProbeDone)
-        return;
-
-    GatewayProbeDone = true;
-
-    if (GatewayUrl.empty()) {
-        HostPrintUTF8("[Gateway] Probe skipped: URL not configured yet.\n");
-        return;
-    }
-
-    string headers = "Content-Type: application/json";
-    string payload = BuildProbePayload();
-    string response = HostUrlGetString(GatewayUrl, UserAgent, headers, payload);
-
-    if (response.empty()) {
-        HostPrintUTF8("[Gateway] Probe sent, but response body is empty. Service may still be running.\n");
-    } else {
-        HostPrintUTF8("[Gateway] Probe received response from gateway.\n");
-    }
-}
-
-// ------------------------------------------------------------
-// Save Settings
-// ------------------------------------------------------------
-string ServerLogin(string User, string Pass) {
-    GatewayUrl = NormalizeGatewayUrl(User);
-
-    if (GatewayUrl.empty())
-        return "URL cannot be empty";
-
-    HostSaveString("gateway_url", GatewayUrl);
-    GatewayProbeDone = false;
-
-    return "200 ok";
-}
-
-// ------------------------------------------------------------
-// Clear Settings
-// ------------------------------------------------------------
-void ServerLogout() {
-    GatewayUrl = "";
-    HostSaveString("gateway_url", "");
-    GatewayProbeDone = false;
-    HostPrintUTF8("[Gateway] URL cleared.\n");
-}
-
-// ------------------------------------------------------------
-// Language Settings
-// ------------------------------------------------------------
-array<string> GetSrcLangs() { return LangTable; }
-array<string> GetDstLangs() { return LangTable; }
-
-// ------------------------------------------------------------
-// Core Translation Logic
-// ------------------------------------------------------------
-string Translate(string Text, string &in SrcLang, string &in DstLang)
-{
-    RefreshConfiguration();
-
-    if (GatewayUrl.empty() || Text.empty())
-        return "";
-
-    // Run probe once before the first actual translation
-    ProbeGatewayOnce();
-
-    // Add current text to history
-    subtitleHistory.insertLast(Text);
-
-    // Grab up to 5 previous lines for context
-    string prevContext = "";
-    int historySize = int(subtitleHistory.length());
-    int targetContextCount = 5;
-    int startIndex = historySize - 2; // Start from the second to last item
-    int addedCount = 0;
-
-    for (int i = startIndex; i >= 0 && addedCount < targetContextCount; i--) {
-        if (!subtitleHistory[i].empty()) {
-            prevContext = subtitleHistory[i] + "\n" + prevContext;
-            addedCount++;
-        }
-    }
-
-    // Combine history with current text
-    string fullContext = prevContext + Text;
-
-    // Build payload and headers
-    string json_request = BuildTranslatePayload(Text, fullContext);
-    string headers = "Content-Type: application/json";
-
-    // Debug: print target URL
-    HostPrintUTF8("[Gateway] POST => " + GatewayUrl + "\n");
-
-    // Send POST request
-    string response = HostUrlGetString(GatewayUrl, UserAgent, headers, json_request);
-
-    // Limit history size to prevent memory issues
-    if (subtitleHistory.length() > 1000)
-        subtitleHistory.removeAt(0);
-
-    if (response.empty()) {
-        HostPrintUTF8("[Gateway] Empty response for translation request.\n");
-        return "";
-    }
-
-    // Parse Response
-    string translatedText = "";
-    string errorText = "";
-    if (TryExtractTranslation(response, translatedText, errorText)) {
-        SrcLang = "UTF8";
-        DstLang = "UTF8";
-        return translatedText.Trim();
-    }
-
-    HostPrintUTF8("[Gateway] Parse failed: " + errorText + "\n");
-    return "";
-}
-
-// ------------------------------------------------------------
-// External Parsing Function (Optional)
-// ------------------------------------------------------------
-string ParseGatewayResponse(string json) {
-    string translatedText = "";
-    string errorText = "";
-    if (TryExtractTranslation(json, translatedText, errorText))
-        return translatedText;
-    return "";
-}
-
-// ------------------------------------------------------------
-// Plugin Initialize / Finalize
-// ------------------------------------------------------------
-void OnInitialize() {
-    RefreshConfiguration();
-
-    if (!GatewayUrl.empty()) {
-        HostPrintUTF8("[Gateway] Connector loaded. Saved URL: " + GatewayUrl + "\n");
-        ProbeGatewayOnce();
-    } else {
-        HostPrintUTF8("[Gateway] Connector loaded. Gateway URL not configured yet.\n");
-    }
-}
-
-void OnFinalize() {
-    HostPrintUTF8("[Gateway] Connector unloaded.\n");
-}
+# Translation Gateway
+
+English | [繁體中文](README.zh-TW.md)
+
+Real-time Japanese → Traditional Chinese subtitle translation for PotPlayer, powered by your own LLM.
+
+PotPlayer recognizes speech (Whisper) or loads YouTube captions, sends each line to Translation Gateway, and shows the translation as a subtitle. The Gateway is a Windows desktop app. It builds the prompt, calls any OpenAI-compatible LLM endpoint, converts the result to Traditional Chinese with OpenCC, and caches it.
+
+## Features
+
+- **One-click open**: copy a YouTube or Twitch URL and click **Open video / stream**.
+  - Live streams play through streamlink.
+  - YouTube VODs open directly in PotPlayer.
+  - The PotPlayer translation script and settings are installed automatically.
+- **Low-latency live translation**: multi-turn conversation mode reuses the model's KV cache, taking about 100–200 ms per line.
+  - When the model is too slow, the original text is returned so subtitles never freeze.
+- **VOD pre-translation**: YouTube videos with auto-generated captions are translated ahead of playback in batches.
+- **Glossary cards**: cards for characters, groups and games hold the correct translation of proper nouns.
+  - When you open a stream, the matching cards are applied automatically.
+  - A knowledge model can build cards from wikis or from pasted data.
+- **Whisper correction**: the app finds words that Whisper keeps mishearing. Once you approve them, they are fixed before translation.
+- **Subtitle monitor**: watch, edit or retranslate subtitles live, and keep per-streamer profiles of context, character lists and replacement rules.
+- **Storage**: SQLite (default) or PostgreSQL holds the translation cache, glossary, subtitle history and an optional audit trail.
+- **YouTube block handling**: when YouTube blocks anonymous access, you get a notice. A MikroTik router can optionally renew its IPv6 prefix, after which the app retries once.
+
+## Requirements
+
+| Item | Notes |
+| --- | --- |
+| Windows 10/11 x64 | The Gateway is a WPF app |
+| [.NET 10 SDK](https://dotnet.microsoft.com/download) | To build from source (the Desktop Runtime is enough to run a published build) |
+| [PotPlayer](https://potplayer.tv/) 64-bit | Player and speech recognition |
+| [streamlink](https://streamlink.github.io/) | Needed only for live streams |
+| An OpenAI-compatible LLM endpoint | For example llama.cpp server, vLLM, Ollama or LM Studio (`/v1/chat/completions`) |
+| Optional: a second LLM endpoint | The knowledge model for glossary mining and Whisper correction (a cloud model works well) |
+| Optional: PostgreSQL | Instead of the local SQLite file |
+
+## Build and run
+
+```powershell
+git clone <this repo>
+cd TranslationGateway
+dotnet publish Gateway/Gateway.csproj -c Release -o publish
+.\publish\Gateway.exe
 ```
 
----
+When the Gateway starts, it listens on `http://127.0.0.1:5000/translate`, or on the next free port if 5000 is taken.
 
-## 5. Gateway Data Structure (C#)
+## Quick start
 
-The Gateway expects a JSON body mapped to the following model:
+1. **Settings → Translation model**: enter the API Host (e.g. `http://localhost:8080/v1`), the model name and an API key if your server needs one. Click **Test connection**.
+2. **Settings → Player**: check the paths to `streamlink.exe` and PotPlayer.
+3. Copy a YouTube or Twitch URL and click **Open video / stream** in the sidebar.
+   - The first time, the Gateway writes its translation script into PotPlayer and turns on PotPlayer's real-time translation.
+   - PotPlayer reads its settings only at startup, so if it is already running the Gateway asks to close it.
+   - If the PotPlayer folder is not writable, the Gateway uses a copy in `%LOCALAPPDATA%\Translation.Gateway\PotPlayer`. The copy shares your settings and history.
+4. Translated subtitles appear in PotPlayer. They are also shown on the **Subtitle monitor** page.
 
-```csharp
-public class PotplayerRequest
-{
-    [JsonPropertyName("current")] 
-    public string Current { get; set; } = ""; // Current Japanese text to translate
-    
-    [JsonPropertyName("context")] 
-    public string Context { get; set; } = ""; // Previous subtitle lines for context
-}
+> Settings are saved when you leave the Settings page. The model is then warmed up again, because the prompt may have changed.
+
+## Pages
+
+### Subtitle monitor
+- **Live table**: double-click the source or the translation to edit it.
+  - Editing a translation stores it in the cache.
+  - Editing the source retranslates the line.
+  - Right-click to copy, retranslate, delete, or turn your fix into a source correction rule.
+- **Stream info and profiles**: set the context (who is streaming, what is happening) and a temporary character list. Save them, together with both rule sets, as a profile per streamer. **Apply** loads a profile and resets the conversation.
+- **Glossary cards**: search the cards and toggle which ones are active. Every noun on an active card goes into the system prompt.
+- **Replacement rules**: one rule per line.
+  - Source fixes (`misheard=correct`) run before translation.
+  - Translation fixes (`wrong=correct`) run after it.
+- **Reset conversation**: use it when translations start drifting or after you seek in a video.
+- **Stats bar**: shows lines in the last 5 minutes, average and P95 model latency, cache hit rate and timeouts.
+
+### Knowledge base
+- Review glossary cards built by the knowledge model: approve, reject, edit, merge or delete them.
+- **Paste data…**: paste a hero list or a translation table, and the knowledge model turns it into nouns on the card.
+- Rejected cards and nouns never reach the prompt.
+
+### Whisper corrections
+- During a stream, the Gateway checks recent subtitles every 5 minutes for nouns that Whisper misheard.
+- Approved corrections are applied to the source text before translation. Rejecting a correction deletes it.
+
+### Settings
+| Tab | What you set |
+| --- | --- |
+| Translation model | Endpoint, model, sampling parameters, and the live system prompt with version history |
+| Knowledge model | A separate endpoint for mining and corrections (optional; the app falls back to the translation model when it fails) |
+| Live | Timeout (default 1500 ms; when exceeded, the original text is returned), multi-turn mode, history limits, duplicate-line detection, mishearing mining |
+| VOD | Pre-translation batch size, buffer length, timeout and scheduling |
+| Database | SQLite or PostgreSQL, and full audit records with a retention period |
+| Player | streamlink and PotPlayer paths, stream quality, optional MikroTik routers |
+
+### Logs
+Application logs, also written to `%LOCALAPPDATA%\Translation.Gateway\logs`.
+
+## When YouTube blocks you
+
+Too many anonymous requests can get your IP blocked by YouTube. Signs of a block include HTTP 429, a redirect to the "unusual traffic" page, or a "sign in to confirm you're not a bot" response.
+
+When the Gateway detects a block, it does not start the player:
+
+- **No router configured**: it tells you anonymous access was probably blocked.
+- **Router configured**: it renews the IPv6 prefix on the router in the same subnet as this PC, then retries once.
+
+### Optional: MikroTik router setup
+
+1. Create a script named `ipv6-release` on the router that releases and renews its DHCPv6 client.
+2. Enable `www-ssl` on the router.
+3. Create a user whose group has `read,write,test,api,rest-api`. Without `api`, the REST API returns "not allowed".
+4. In **Settings → Player**, click **Add**, enter `host:port`, the user name and the password. Click **Test connection**.
+
+Click **Setup help** in that section for the exact RouterOS commands.
+
+## Data locations
+
+| What | Where |
+| --- | --- |
+| Settings | `settings.json` in the Gateway's working folder (next to `Gateway.exe` when started normally) |
+| SQLite database, logs, PotPlayer copy | `%LOCALAPPDATA%\Translation.Gateway\` |
+
+> `settings.json` stores API keys and router passwords **in plain text**. Do not share it.
+
+## Using with PotPlayer manually
+
+You don't need this if you open videos through the Gateway. Otherwise, see [tools/potplayer/README.md](tools/potplayer/README.md). The request format is:
+
+```json
+POST /translate
+{ "current": "今の字幕", "context": ["前の字幕", "..."] }
 ```
 
----
+## MCP server (optional)
 
-## 6. Troubleshooting
+The `Bridge` project is a stdio MCP server that exposes a `translate_text` tool using the same translation pipeline:
 
-* **Connection Refused**: Ensure the Gateway is running and listening on Port `5000`.
-* **Empty Response**: Check the LLM backend (Ollama/LM Studio) to ensure the model is loaded and responding to the Gateway.
-* **Special Characters**: If the JSON fails to parse, ensure the AngelScript is escaping quotes correctly within the `text` string.
+```powershell
+dotnet run --project Bridge/Bridge.csproj
+```
+
+## Development
+
+| Project | Contents |
+| --- | --- |
+| `Bridge.Core` | Translation pipeline, LLM clients, stores (SQLite/PostgreSQL), settings |
+| `Gateway` | WPF app and the `/translate` HTTP endpoint |
+| `Bridge` | MCP stdio server |
+| `tests/Bridge.Core.Tests` | Unit tests (Windows and Linux) |
+| `tests/Gateway.Wpf.Tests` | WPF smoke tests (Windows only) |
+
+```powershell
+dotnet build Translation.slnx
+dotnet test --project tests/Bridge.Core.Tests/Bridge.Core.Tests.csproj
+```
+
+PostgreSQL integration tests are skipped unless `TG_TEST_POSTGRES` is set to a connection string. They only create and drop their own `tg_test_*` schemas.
+
+## Troubleshooting
+
+- **PotPlayer shows "credentials are missing or invalid"**: a PotPlayer update restored the original Bing script. Open the video through the Gateway again, or reinstall the script by hand as described in [tools/potplayer/README.md](tools/potplayer/README.md).
+- **Subtitles come back untranslated**: the model exceeded the live timeout. Check the latency on the stats bar.
+  - Long system prompts and a busy shared GPU are the usual causes.
+  - Multi-turn mode and warm-up rely on the server's prompt cache.
+- **No subtitles at all**: check that the Gateway is running and **Logs** shows incoming requests, and that PotPlayer's real-time translation is enabled.
+
+## License
+
+[MIT](LICENSE)

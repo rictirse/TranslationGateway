@@ -1,11 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFramework>net9.0</TargetFramework>
+		<TargetFramework>net10.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<RootNamespace>Translation.Core</RootNamespace>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Include="Sql\*.sql" />
+		<!-- PotPlayer 翻譯腳本模板：開台時把 port 寫死後寫入 PotPlayer（LogicalName 固定，TranslateScriptBuilder 才讀得到） -->
+		<EmbeddedResource Include="..\tools\potplayer\SubtitleTranslate.as" LogicalName="Translation.Bridge.Core.SubtitleTranslate.as" />
+	</ItemGroup>
 
 	<ItemGroup>
 		<PackageReference Include="OpenAI" Version="2.12.0" />
@@ -13,8 +19,13 @@
 		<PackageReference Include="Dapper" Version="2.1.72" />
 		<PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
 		<PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.5" />
+		<PackageReference Include="Npgsql" Version="10.0.3" />
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
-		<PackageReference Include="Microsoft.Extensions.Http" Version="9.0.5" />
+		<PackageReference Include="Microsoft.Extensions.Http" Version="10.0.5" />
+		<!-- 安全性釘版：OpenCCNET → jieba.NET 與 Microsoft.Data.Sqlite 帶入的舊版有已知漏洞 -->
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+		<PackageReference Include="System.Drawing.Common" Version="10.0.13" />
+		<PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
 		<PackageReference Include="OpenCCNET" Version="1.1.0" />
 	</ItemGroup>
-</Project>
+</Project>

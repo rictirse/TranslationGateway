@@ -10,4 +10,6 @@ public interface ITextProcessingService
     /// </summary>
     string PostProcess(string translatedText, string originalText);
     TranslationValidationResult ValidateTranslation(string translatedText, string originalText);
+    /// <summary>是否為不需翻譯的無意義輸入（空白、無任何文字字元、或單一字元大量重複）。</summary>
+    bool ShouldSkipTranslation(string text);
 }

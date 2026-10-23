@@ -25,6 +25,13 @@ public class TextProcessingService : ITextProcessingService
 
         result = result.Trim();
 
+        // 字幕句尾不加句號，模型常照抄原文的「。」，所以在這裡統一去掉結尾連續的全形句號；只動結尾，半形「.」、「…」、「？」「！」與收尾括號前的「。」保持原樣。
+        var withoutTrailingPeriod = result.TrimEnd('。', '．').Trim();
+        if (withoutTrailingPeriod.Length > 0)
+        {
+            result = withoutTrailingPeriod;
+        }
+
         return result;
     }
     public TranslationValidationResult ValidateTranslation(string translatedText, string originalText)
@@ -59,5 +66,18 @@ public class TextProcessingService : ITextProcessingService
             return new TranslationValidationResult(false, $"行數嚴重缺失 (原文 {originalLineCount} 行 / 翻譯 {translatedLineCount} 行)", ratio);
 
         return new TranslationValidationResult(true, "驗證通過", ratio);
+    }
+
+    public bool ShouldSkipTranslation(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return true;
+
+        var trimmed = text.Trim();
+
+        // 只有符號、標點、音符、數字、空白，沒有任何文字字元
+        if (!trimmed.Any(char.IsLetter)) return true;
+
+        // 單一字元連續重複 8 次（含）以上，視為雜訊
+        return trimmed.Length >= 8 && trimmed.All(c => c == trimmed[0]);
     }
 }

@@ -1,0 +1,109 @@
+<UserControl x:Class="Translation.Gateway.Views.Controls.LiveSettingsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <!-- 欄位輸入框：統一上下間距 -->
+        <Style x:Key="FieldBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="Margin" Value="0,4"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,0,8,8" MaxWidth="980" HorizontalAlignment="Stretch">
+
+            <GroupBox Header="即時翻譯">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                               Text="直播沒有字幕可以預讀，每句字幕即時送翻譯模型。"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="逾時 (ms)" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                        <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding TimeoutMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="超過就直接回傳原文，避免字幕卡住。建議 1500；0 代表不限制"/>
+
+                        <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,8,0,4"
+                                  Content="多輪對話模式"
+                                  IsChecked="{Binding UseConversationMode, Mode=TwoWay}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="每句字幕當成一輪對話，延遲約 100～200ms；關閉則改回單輪（約 750ms 以上）"/>
+
+                        <TextBlock Text="對話上限輪數" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                        <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding ConversationMaxTurns, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="歷史累積到這個輪數就修剪（太長會變慢）"/>
+
+                        <TextBlock Text="修剪後保留輪數" Style="{StaticResource FieldLabel}" Grid.Row="3"/>
+                        <TextBox Grid.Row="3" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding ConversationKeepTurns, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="3" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="修剪時保留最近幾句當上下文"/>
+
+                        <TextBlock Text="閒置重置 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="4"/>
+                        <TextBox Grid.Row="4" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding ConversationIdleResetSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="4" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="超過這麼久沒有字幕（暫停、換影片）就清空對話"/>
+
+                        <TextBlock Text="重複字幕判斷 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="5"/>
+                        <TextBox Grid.Row="5" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding RevisionWindowSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="5" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="幾秒內的相似字幕視為同一句的修正版：只差標點或變短就沿用上一句譯文，其他照常翻譯並取代上一列；0 代表關閉"/>
+                    </Grid>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="聽錯字探勘">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="110"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,2,0,4"
+                              Content="每 5 分鐘從字幕找出可能的聽錯字（存成待審核，到「聽錯字修正」頁核准後才會套用）"
+                              IsChecked="{Binding MishearingMiningEnabled, Mode=TwoWay}" />
+
+                    <TextBlock Text="探勘間隔 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding MishearingMiningIntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="也是每次取最近字幕的時間範圍"/>
+
+                    <TextBlock Text="最少新字幕句數" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding MishearingMiningMinLines, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="距離上一次探勘新字幕不到這麼多句就略過"/>
+                </Grid>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

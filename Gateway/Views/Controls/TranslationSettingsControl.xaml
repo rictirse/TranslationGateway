@@ -1,125 +1,73 @@
 ﻿<UserControl x:Class="Translation.Gateway.Views.Controls.TranslationSettingsControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="clr-namespace:Translation.Gateway.Views.Controls"
-             mc:Ignorable="d" 
+             xmlns:views="clr-namespace:Translation.Gateway.Views"
+             mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="800">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="10">
+    <UserControl.Resources>
+        <!-- 欄位輸入框：統一上下間距 -->
+        <Style x:Key="FieldBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="Margin" Value="0,4"/>
+        </Style>
+    </UserControl.Resources>
 
-            <GroupBox Header="Connection &amp; Model" Margin="0,0,0,15" Padding="10">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,0,8,8" MaxWidth="980" HorizontalAlignment="Stretch">
+
+            <GroupBox Header="連線與模型">
+                <StackPanel>
+                    <local:ModelConnectionControl/>
+                    <CheckBox Margin="0,8,0,2"
+                              Content="改用內建的本機端點（忽略上面的 API Host）"
+                              IsChecked="{Binding UseLocalModel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="模型參數">
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="160"/>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="110"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Text="API Host:" VerticalAlignment="Center" Grid.Row="0" Grid.Column="0"/>
-                    <TextBox Grid.Row="0" Grid.Column="1" Margin="0,5"
-                             Text="{Binding ApiHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Model:" VerticalAlignment="Center" Grid.Row="1" Grid.Column="0"/>
-                    <TextBox Grid.Row="1" Grid.Column="1" Margin="0,5"
-                             Text="{Binding Model, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Chat Completions Path:" VerticalAlignment="Center" Grid.Row="2" Grid.Column="0"/>
-                    <TextBox Grid.Row="2" Grid.Column="1" Margin="0,5"
-                             Text="{Binding ChatCompletionsPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="API Key:" VerticalAlignment="Center" Grid.Row="3" Grid.Column="0"/>
-                    <TextBox Grid.Row="3" Grid.Column="1" Margin="0,5"
-                             Text="{Binding ApiKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <CheckBox Grid.Row="4" Grid.Column="1" Margin="0,8,0,0"
-                              Content="Use Local Model"
-                              IsChecked="{Binding UseLocalModel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                </Grid>
-            </GroupBox>
-
-            <GroupBox Header="Performance" Margin="0,0,0,15" Padding="10">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="160"/>
-                        <ColumnDefinition Width="120"/>
-                        <ColumnDefinition Width="160"/>
-                        <ColumnDefinition Width="120"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Text="Max Parallelism:" VerticalAlignment="Center" Grid.Row="0" Grid.Column="0"/>
-                    <TextBox Grid.Row="0" Grid.Column="1" Margin="0,5,12,5"
-                             Text="{Binding MaxParallelism, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Batch Size Hard Cap:" VerticalAlignment="Center" Grid.Row="0" Grid.Column="2"/>
-                    <TextBox Grid.Row="0" Grid.Column="3" Margin="0,5"
-                             Text="{Binding BatchSizeHardCap, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Max Retries:" VerticalAlignment="Center" Grid.Row="1" Grid.Column="0"/>
-                    <TextBox Grid.Row="1" Grid.Column="1" Margin="0,5,12,5"
-                             Text="{Binding MaxRetries, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Max Retry:" VerticalAlignment="Center" Grid.Row="1" Grid.Column="2"/>
-                    <TextBox Grid.Row="1" Grid.Column="3" Margin="0,5"
-                             Text="{Binding MaxRetry, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                </Grid>
-            </GroupBox>
-
-            <GroupBox Header="Context &amp; Output" Margin="0,0,0,15" Padding="10">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="160"/>
-                        <ColumnDefinition Width="120"/>
-                        <ColumnDefinition Width="160"/>
-                        <ColumnDefinition Width="120"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Text="Context:" VerticalAlignment="Center" Grid.Row="0" Grid.Column="0"/>
-                    <TextBox Grid.Row="0" Grid.Column="1" Margin="0,5,12,5"
-                             Text="{Binding Context, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Max Output:" VerticalAlignment="Center" Grid.Row="0" Grid.Column="2"/>
-                    <TextBox Grid.Row="0" Grid.Column="3" Margin="0,5"
-                             Text="{Binding MaxOutput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                    <TextBlock Text="Temperature:" VerticalAlignment="Center" Grid.Row="1" Grid.Column="0"/>
-                    <TextBox Grid.Row="1" Grid.Column="1" Margin="0,5,12,5"
+                    <TextBlock Text="Temperature" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource FieldBox}"
                              Text="{Binding Temperature, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="0 最穩定，適合翻譯"/>
+
+                    <TextBlock Text="Top P" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding TopP, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="留空代表不送，使用模型預設值"/>
                 </Grid>
             </GroupBox>
 
-            <GroupBox Header="System Prompt" Margin="0,0,0,15" Padding="10">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="8"/>
-                        <RowDefinition Height="180"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Text="System Prompt Template:" Grid.Row="0"/>
-                    <TextBox Grid.Row="2"
-                             AcceptsReturn="True"
+            <GroupBox Header="System Prompt">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                               Text="直播情境與角色表會自動附加在後面（在「字幕監看」頁編輯）。選擇版本會替換下面的內容；修改內容後存檔會存成新的自訂版本。修改後對話會重置，離開此頁時會自動預熱模型。"/>
+                    <!-- 這個控制項的 DataContext 是 TranslationSettings：版本清單改綁到 SettingsView 的 DataContext（SettingsViewModel） -->
+                    <TextBlock Text="版本" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+                    <ComboBox Margin="0,0,0,6"
+                              ItemsSource="{Binding DataContext.LivePromptVersions, RelativeSource={RelativeSource AncestorType={x:Type views:SettingsView}}}"
+                              SelectedItem="{Binding DataContext.SelectedLivePromptVersion, RelativeSource={RelativeSource AncestorType={x:Type views:SettingsView}}}"
+                              DisplayMemberPath="Label"/>
+                    <TextBox AcceptsReturn="True"
                              VerticalScrollBarVisibility="Auto"
                              TextWrapping="Wrap"
-                             MinHeight="180"
+                             Height="240"
                              Text="{Binding SystemPromptTemplate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                </Grid>
+                </StackPanel>
             </GroupBox>
 
         </StackPanel>

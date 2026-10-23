@@ -12,13 +12,30 @@ public partial class TranslationJob : ObservableObject
     /// <summary>
     /// 當前句子
     /// </summary>
-    public string Current { get; set; } = string.Empty;
+    [ObservableProperty] private string _current = string.Empty;
     /// <summary>
     /// 翻譯後的句子
     /// </summary>
-    public string TranslatedText { get; set; } = string.Empty;
+    [ObservableProperty] private string _translatedText = string.Empty;
+    /// <summary>
+    /// 快取索引（PotPlayer 送來的原始原文）；修正原文後 <see cref="Current"/> 會改變，但此值不變
+    /// </summary>
+    public string CacheKey { get; set; } = string.Empty;
+
+    /// <summary>Whisper 原始文字（原文修正之前）；沒有原文修正時與 Current 相同。</summary>
+    public string RawSource { get; set; } = string.Empty;
     public string UserPrompt { get; set; } = string.Empty;
     public string SystemPrompt { get; set; } = string.Empty;
+    /// <summary>
+    /// 譯文來源（模型、快取、逾時、直通）
+    /// </summary>
+    public TranslationSource Source { get; set; } = TranslationSource.Model;
+
+    /// <summary>此筆取代的前一筆 Job 的 Id；不是修正版時為 null。</summary>
+    public string? RevisionOf { get; set; }
+
+    /// <summary>命中翻譯快取時，該筆 TranslationCache 的 Id；其他情況為 null。</summary>
+    public long? CacheId { get; set; }
 
     public int UserTokens
     {

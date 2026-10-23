@@ -1,0 +1,94 @@
+<UserControl x:Class="Translation.Gateway.Views.Controls.VodSettingsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <!-- 欄位輸入框：統一上下間距 -->
+        <Style x:Key="FieldBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="Margin" Value="0,4"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,0,8,8" MaxWidth="980" HorizontalAlignment="Stretch">
+
+            <TextBlock Style="{StaticResource Hint}"
+                       Text="有生成式字幕的 YouTube 錄影：開片先等詞彙卡生效，再預先批次翻譯並整理字幕。"/>
+
+            <GroupBox Header="預先翻譯">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="110"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="每批句數" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding PrefetchBatchSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="越大越省電，但即時翻譯沒命中時要等越久。建議 20（約 3 秒）"/>
+
+                    <TextBlock Text="庫存低於 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding PrefetchLowWaterSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="播放位置之後已翻好的字幕剩不到這麼久，就補翻下一批"/>
+
+                    <TextBlock Text="逾時 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding PrefetchTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="預先翻譯單批的逾時，比即時翻譯寬鬆"/>
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Header="開片">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="110"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="等待資料探勘上限 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding MiningWaitSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="探勘完成或失敗就馬上開始；超過這麼久也先開始，探勘結果之後再套用"/>
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Header="排程">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="110"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="插隊門檻 (%)" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding PreemptThresholdPercent, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="知識庫模型有更優先的工作時，正在跑的工作預估進度達到這個比例就讓它跑完，否則取消重排（翻譯模型不插隊）"/>
+                </Grid>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Translation.Bridge.Core.Interface;
 using Translation.Bridge.Core.Models;
@@ -11,18 +12,20 @@ public class SettingsService : ISettingsService
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true,
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        // 中文、日文直接存原字，不轉成 \uXXXX，方便手動檢視與編輯 settings.json
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     public AppSettings Current { get; private set; } = new();
 
     public string SettingsPath { get; }
 
-    public SettingsService(ILogger<SettingsService> logger)
+    public SettingsService(ILogger<SettingsService> logger, string? settingsPath = null)
     {
         _logger = logger;
 
-        SettingsPath = "settings.json";
+        SettingsPath = settingsPath ?? "settings.json";
     }
 
     public async Task LoadAsync()

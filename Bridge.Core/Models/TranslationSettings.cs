@@ -1,49 +1,33 @@
-﻿public class TranslationSettings
+﻿using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Text.Json.Serialization;
+using Translation.Bridge.Core.Services;
+
+public class TranslationSettings : INotifyPropertyChanged
 {
     public string ApiHost { get; set; } = string.Empty;
-    public string Model { get; set; } = string.Empty;
-    public string ChatCompletionsPath { get; set; } = string.Empty;
+
+    private string _model = string.Empty;
+
+    /// <summary>
+    /// 模型名稱。設定頁的「思考強度／思考上限」依名稱是否為 GLM 切換顯示，
+    /// 因此變更時要發 PropertyChanged 讓 Visibility 繫結立即更新。
+    /// </summary>
+    public string Model
+    {
+        get => _model;
+        set
+        {
+            _model = value;
+            OnPropertyChanged();
+        }
+    }
+
     public string? ApiKey { get; set; } = null;
     /// <summary>
     /// 是否使用本地模型
     /// </summary>
     public bool UseLocalModel { get; set; } = false;
-
-    // --- 效能參數 (影響翻譯速度與 GPU 負載) ---
-
-    /// <summary>
-    /// 同時發送給 Ollama 的請求數量。
-    /// 5090 算力極強，建議設為 4-8。這能讓 GPU 並行處理多個 Batch，大幅縮短整部影片翻譯時間。
-    /// </summary>
-    public int MaxParallelism { get; set; } = 4;
-
-    /// <summary>
-    /// 單次 Request 包含的字幕行數 (BatchCount)。
-    /// 影響上下文(Context)佔用率。建議 100-150，配合 5090 的大VRAM可提高翻譯一致性。
-    /// </summary>
-    public int BatchSizeHardCap { get; set; } = 80;
-
-    /// <summary>
-    /// 當模型回傳格式錯誤（例如漏行、標籤未過濾）時，自動重試的次數。
-    /// </summary>
-    public int MaxRetries { get; set; } = 3;
-
-
-    // --- Token 與 上下文 (影響顯存分配與穩定性) ---
-
-    /// <summary>
-    /// 模型總上下文窗口 (num_ctx)。
-    /// 你目前的 5090 滿血版建議固定為 16384。
-    /// 此值決定了模型能「看見」多少前文，也是 VRAM 佔用的主要變數。
-    /// </summary>
-    public int Context { get; set; } = 16384;
-
-    /// <summary>
-    /// 模型單次輸出的 Token 上限 (num_predict)。
-    /// 若 BatchSize 調大，此值也必須調高（建議 4096），避免翻譯到一半被強制切斷。
-    /// </summary>
-    public int MaxOutput { get; set; } = 2048;
-
 
     // --- 翻譯微調 (影響翻譯品質與風格) ---
 
@@ -53,13 +37,65 @@
     /// 若想讓語氣更生動活潑，可微調至 0.2-0.3，但過高可能導致格式崩潰。
     /// </summary>
     public double Temperature { get; set; } = 0.0;
-    /// <summary>
-    /// 存放在地化專家指令的模板。
-    /// 包含防幻覺標籤過濾、台灣口語風格定義等核心指令。
-    /// </summary>
-    public string SystemPromptTemplate { get; set; } = "";
-    /// <summary>
-    /// 翻譯失敗重試次數上限。
-    /// </summary>
-    public int MaxRetry { get; set; } = 1;
+
+    /// <summary>核取樣（nucleus sampling）的累積機率上限（top_p）；null 代表不送，使用模型預設值。</summary>
+    public double? TopP { get; set; }
+
+    /// <summary>存放在地化專家指令的模板；預設為 PromptBuilder.DefaultSystemTemplate，空白時組 prompt 亦會退回該預設模板。
+    /// 不再存進 settings.json（讀檔時也忽略舊值）：執行期由 PromptTemplateRegistry 依選用的版本填入，
+    /// 編輯後存檔會存成 prompt_templates 的新版本。設定頁改選版本時會替換內容，因此變更時要發 PropertyChanged 讓編輯框更新。</summary>
+    [JsonIgnore]
+    public string SystemPromptTemplate
+    {
+        get => _systemPromptTemplate;
+        set
+        {
+            _systemPromptTemplate = value;
+            OnPropertyChanged();
+        }
+    }
+
+    private string _systemPromptTemplate = PromptBuilder.DefaultSystemTemplate;
+
+    /// <summary>直播 system prompt 選用的版本（prompt_templates.id）；null 表示跟著最新的程式預設。</summary>
+    public long? SystemPromptTemplateId { get; set; }
+
+    /// <summary>單次翻譯的逾時（毫秒）。0 或負數表示不啟用逾時。</summary>
+    public int TimeoutMs { get; set; } = 1500;
+
+    /// <summary>多輪對話模式（每句字幕一輪），可大幅降低延遲；false 時使用單輪模式。</summary>
+    public bool UseConversationMode { get; set; } = true;
+
+    /// <summary>對話歷史達到此輪數時重置。</summary>
+    public int ConversationMaxTurns { get; set; } = 12;
+
+    /// <summary>重置時保留的最近輪數。</summary>
+    public int ConversationKeepTurns { get; set; } = 4;
+
+    /// <summary>超過此秒數沒有新的對話就清空歷史（換影片、暫停）。</summary>
+    public int ConversationIdleResetSeconds { get; set; } = 90;
+
+    /// <summary>幾秒內的相似字幕視為同一句的修正版；0 代表關閉。</summary>
+    public int RevisionWindowSeconds { get; set; } = 8;
+
+    /// <summary>字幕聽錯字探勘：定期請知識庫模型從最近字幕找出 Whisper 聽錯的名詞寫法（存成待審核修正）。</summary>
+    public bool MishearingMiningEnabled { get; set; } = true;
+
+    /// <summary>聽錯字探勘的間隔（秒），也是取最近字幕的時間範圍。</summary>
+    public int MishearingMiningIntervalSeconds { get; set; } = 300;
+
+    /// <summary>距離上一次探勘至少要有幾句新字幕才執行（字幕太少不浪費 tokens）。</summary>
+    public int MishearingMiningMinLines { get; set; } = 10;
+
+    /// <summary>思考強度（none／low／medium／high／max）：只有知識庫模型且為 GLM 時使用，探勘重視速度故預設 low。</summary>
+    public string ReasoningEffort { get; set; } = "low";
+
+    /// <summary>思考上限（tokens）：只有知識庫模型且不是 GLM 時使用（例如本地 Qwen 的 reasoning_budget_tokens）；0 或負數代表不送。</summary>
+    public int ReasoningBudgetTokens { get; set; } = 4000;
+
+    /// <summary>Model 變更時通知繫結更新（設定頁依模型名稱切換 GLM／非 GLM 的思考參數欄位）。</summary>
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

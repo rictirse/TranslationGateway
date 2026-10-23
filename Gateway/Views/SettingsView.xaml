@@ -4,20 +4,345 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:local="clr-namespace:Translation.Gateway.Views.Controls"
-             mc:Ignorable="d" 
+             xmlns:conv="clr-namespace:Translation.Gateway.Converters"
+             mc:Ignorable="d"
              d:DesignHeight="700"
              d:DesignWidth="1000">
-    <Grid Margin="5">
-        <TabControl>
-            <!--<TabItem Header="一般設定">
-                <StackPanel Margin="10">
-                    <TextBlock Text="這裡放全域的路徑或其他設定..." />
-                </StackPanel>
-            </TabItem>-->
+    <UserControl.Resources>
+        <conv:GlmModelVisibilityConverter x:Key="GlmVisibility"/>
+    </UserControl.Resources>
+    <DockPanel Margin="16,14,8,0">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+            <TextBlock Text="設定" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="修改會在離開此頁或關閉程式時自動儲存" Style="{StaticResource Hint}" Margin="0,2,0,0"/>
+        </StackPanel>
 
-            <TabItem Header="翻譯模型 (Translation)">
-                <local:TranslationSettingsControl DataContext="{Binding Translation}" />
+        <!-- 分頁各自捲動，小螢幕也看得到全部欄位（未選取的分頁內容不會載入） -->
+        <TabControl Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}">
+            <TabItem Header="翻譯模型">
+                <!-- 本身已有 ScrollViewer，不再包一層 -->
+                <local:TranslationSettingsControl DataContext="{Binding Translation}"/>
+            </TabItem>
+
+            <TabItem Header="知識庫模型">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,8,8,8" MaxWidth="980" HorizontalAlignment="Stretch">
+                        <GroupBox Header="連線與模型">
+                            <local:ModelConnectionControl DataContext="{Binding Lorebook}"/>
+                        </GroupBox>
+                        <GroupBox Header="模型參數" Margin="0,6,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Text="Temperature" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,4"
+                                         Text="{Binding Lorebook.Temperature, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Text="越低越穩定；探勘建議 0～0.3"/>
+
+                                <TextBlock Text="Top P" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4"
+                                         Text="{Binding Lorebook.TopP, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"/>
+                                <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Text="留空代表不送，使用模型預設值"/>
+
+                                <!-- 思考強度：只有 GLM 顯示（整列一起隱藏） -->
+                                <Grid Grid.Row="2" Grid.ColumnSpan="3"
+                                      Visibility="{Binding Lorebook.Model, Converter={StaticResource GlmVisibility}}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="110"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="思考強度" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox Grid.Column="1" Margin="0,4"
+                                              AutomationProperties.AutomationId="LorebookReasoningEffort"
+                                              SelectedValuePath="Tag"
+                                              SelectedValue="{Binding Lorebook.ReasoningEffort, Mode=TwoWay}">
+                                        <ComboBoxItem Content="關閉思考" Tag="none"/>
+                                        <ComboBoxItem Content="低（預設，最快）" Tag="low"/>
+                                        <ComboBoxItem Content="中" Tag="medium"/>
+                                        <ComboBoxItem Content="高" Tag="high"/>
+                                        <ComboBoxItem Content="最高" Tag="max"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                               Text="Z.AI GLM 的 reasoning_effort。探勘重視速度，建議「低」"/>
+                                </Grid>
+
+                                <!-- 思考上限：非 GLM（例如本地 Qwen）才顯示（整列一起隱藏） -->
+                                <Grid Grid.Row="3" Grid.ColumnSpan="3"
+                                      Visibility="{Binding Lorebook.Model, Converter={StaticResource GlmVisibility}, ConverterParameter=Invert}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="110"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="思考上限 (tokens)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Grid.Column="1" Margin="0,4"
+                                             AutomationProperties.AutomationId="LorebookReasoningBudgetTokens"
+                                             Text="{Binding Lorebook.ReasoningBudgetTokens, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                               Text="本地模型（例如 Qwen）的 reasoning_budget_tokens；0 代表不限制"/>
+                                </Grid>
+                            </Grid>
+                        </GroupBox>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
+                            <Button Content="測試連線" Command="{Binding TestLorebookConnectionCommand}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                            <!-- 成功綠色、失敗紅色、測試中（null）一般顏色 -->
+                            <TextBlock Text="{Binding LorebookTestMessage}" TextWrapping="Wrap" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding LorebookTestSucceeded}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LorebookTestSucceeded}" Value="False">
+                                                <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Hint}"
+                                   Text="從字幕或情境找出新名詞、建立詞彙卡時使用的模型（例如 Z.AI 的 GLM，網址填到 /v4 為止）。由程式直接呼叫，不經過 LiteLLM。"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="直播">
+                <!-- 本身已有 ScrollViewer，不再包一層 -->
+                <local:LiveSettingsControl DataContext="{Binding Translation}"/>
+            </TabItem>
+
+            <TabItem Header="錄影">
+                <!-- 本身已有 ScrollViewer，不再包一層 -->
+                <local:VodSettingsControl DataContext="{Binding Vod}"/>
+            </TabItem>
+
+            <TabItem Header="資料庫">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,8,8,8" MaxWidth="980" HorizontalAlignment="Stretch">
+                        <GroupBox Header="資料庫">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,6">
+                                    <RadioButton Content="SQLite（預設）" GroupName="DatabaseBackend" Margin="0,0,16,0"
+                                                 IsChecked="{Binding IsSqlite, Mode=TwoWay}" />
+                                    <RadioButton Content="PostgreSQL" GroupName="DatabaseBackend"
+                                                 IsChecked="{Binding IsPostgres, Mode=TwoWay}" />
+                                </StackPanel>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Text="SQLite 檔案" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                                    <TextBox Grid.Row="0" Grid.Column="1" Margin="0,4"
+                                             ToolTip="留空使用預設位置"
+                                             IsEnabled="{Binding IsSqlite}"
+                                             Text="{Binding Database.SqliteFilePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="主機" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                                    <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4"
+                                             ToolTip="PostgreSQL 伺服器位址"
+                                             IsEnabled="{Binding IsPostgres}"
+                                             Text="{Binding Database.Host, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="Port" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                                    <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4"
+                                             ToolTip="PostgreSQL 連接埠，預設 5432"
+                                             IsEnabled="{Binding IsPostgres}"
+                                             Text="{Binding Database.Port, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="資料庫" Style="{StaticResource FieldLabel}" Grid.Row="3"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" Margin="0,4"
+                                             ToolTip="資料庫名稱"
+                                             IsEnabled="{Binding IsPostgres}"
+                                             Text="{Binding Database.Database, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="帳號" Style="{StaticResource FieldLabel}" Grid.Row="4"/>
+                                    <TextBox Grid.Row="4" Grid.Column="1" Margin="0,4"
+                                             ToolTip="登入帳號"
+                                             IsEnabled="{Binding IsPostgres}"
+                                             Text="{Binding Database.UserName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="密碼" Style="{StaticResource FieldLabel}" Grid.Row="5"/>
+                                    <TextBox Grid.Row="5" Grid.Column="1" Margin="0,4"
+                                             ToolTip="登入密碼（明碼存在 settings.json）"
+                                             IsEnabled="{Binding IsPostgres}"
+                                             Text="{Binding Database.Password, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="Schema" Style="{StaticResource FieldLabel}" Grid.Row="6"/>
+                                    <TextBox Grid.Row="6" Grid.Column="1" Margin="0,4"
+                                             ToolTip="資料表所在的 Schema，預設 public"
+                                             IsEnabled="{Binding IsPostgres}"
+                                             Text="{Binding Database.Schema, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
+                                    <Button Content="測試連線" Command="{Binding TestDbConnectionCommand}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                    <!-- 成功綠色、失敗紅色、測試中（null）一般顏色 -->
+                                    <TextBlock Text="{Binding ConnectionTestMessage}" TextWrapping="Wrap" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ConnectionTestSucceeded}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding ConnectionTestSucceeded}" Value="False">
+                                                        <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+
+                                <TextBlock Text="{Binding ActiveDatabase}" Style="{StaticResource Hint}" />
+                                <TextBlock Text="切換資料庫或修改連線資訊後，需重新啟動程式才會生效；兩邊的資料不會自動同步"
+                                           Style="{StaticResource Hint}" Margin="0,2,0,0" />
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="回溯紀錄" Margin="0,6,0,0">
+                            <StackPanel>
+                                <CheckBox Content="保存完整紀錄" IsChecked="{Binding Audit.FullRecordEnabled, Mode=TwoWay}"
+                                          Margin="0,2,0,4" />
+                                <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap"
+                                           Text="開啟時每次呼叫模型都保存完整的 prompt 與回覆，方便之後分析與優化；關閉時只記用了哪一版 prompt 與設定。資料量較大，建議測試時開啟。"/>
+
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="110"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="保存天數" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Grid.Column="1" Margin="0,4"
+                                             ToolTip="超過天數的紀錄會在程式啟動時刪除；0 表示永不刪除"
+                                             Text="{Binding Audit.RetentionDays, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"
+                                               Text="超過天數的模型呼叫紀錄與快照，會在程式啟動時刪除；0 表示永不刪除。直播與字幕紀錄不受影響。"/>
+                                </Grid>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="播放器">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,8,8,8" MaxWidth="980" HorizontalAlignment="Stretch">
+                        <GroupBox Header="直播播放（streamlink）">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Text="streamlink 路徑" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,4"
+                                         ToolTip="streamlink.exe 的完整路徑"
+                                         Text="{Binding Streamlink.StreamlinkPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Text="播放器路徑" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4"
+                                         ToolTip="PotPlayer 的完整路徑"
+                                         Text="{Binding Streamlink.PlayerPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Text="畫質" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4"
+                                         ToolTip="streamlink 的畫質參數，例如 best、720p、best-unfiltered"
+                                         Text="{Binding Streamlink.Quality, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="開台前更換 IPv6（MikroTik 路由器，選用）" Margin="0,6,0,0">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Text="路由器清單" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
+                                    <DataGrid Grid.Row="0" Grid.Column="1" Margin="0,4" MinHeight="64"
+                                              AutoGenerateColumns="False" CanUserAddRows="False"
+                                              ItemsSource="{Binding Router.Routers}"
+                                              SelectedItem="{Binding SelectedRouter, Mode=TwoWay}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="位址（IP:port）" Width="*"
+                                                                Binding="{Binding Host, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                            <DataGridTextColumn Header="帳號" Width="130"
+                                                                Binding="{Binding UserName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                            <DataGridTextColumn Header="密碼" Width="130"
+                                                                Binding="{Binding Password, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,2,0,4">
+                                        <Button Content="新增" Command="{Binding AddRouterCommand}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                        <Button Content="刪除選取" Command="{Binding RemoveRouterCommand}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <TextBlock Text="腳本名稱" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                                    <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4"
+                                             ToolTip="要執行的路由器腳本名稱"
+                                             Text="{Binding Router.ScriptName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Text="等待秒數" Style="{StaticResource FieldLabel}" Grid.Row="3"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" Margin="0,4"
+                                             ToolTip="執行腳本後等待重新取得 IPv6 前綴的最長秒數"
+                                             Text="{Binding Router.WaitSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
+                                    <Button Content="測試連線" Command="{Binding TestRouterCommand}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                    <Button Content="設定說明" Command="{Binding ShowRouterHelpCommand}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding RouterTestMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                </StackPanel>
+
+                                <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap"
+                                           Text="在清單每台各填一列（位址、帳號、密碼）。有填才會啟用：開 YouTube 時如果被擋，會請和這台電腦同網段的路由器重新取得 IPv6 前綴，再重試一次。"/>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
         </TabControl>
-    </Grid>
+    </DockPanel>
 </UserControl>

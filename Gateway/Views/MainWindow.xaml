@@ -4,22 +4,151 @@
         xmlns:vm="clr-namespace:Translation.Gateway.ViewModels"
         xmlns:v="clr-namespace:Translation.Gateway.Views"
         Title="Translation Gateway" WindowStartupLocation="CenterScreen" Height="820" Width="1200"
+        MinWidth="900" MinHeight="560"
+        FontFamily="{StaticResource UiFont}" FontSize="13"
+        Background="{StaticResource PageBrush}"
         Closing="Window_Closing">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="150"/>
+            <ColumnDefinition Width="176"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <StackPanel Background="#F0F0F0">
-            <Button Content="Dashboard" Command="{Binding NavigateCommand}" CommandParameter="Dashboard" Margin="5"/>
-            <Button Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" Margin="5"/>
-            <Button Content="Chat Sandbox" Command="{Binding NavigateCommand}" CommandParameter="Chat" Margin="5"/>
-            <Button Content="Knowledge" Command="{Binding NavigateCommand}" CommandParameter="Knowledge" Margin="5"/>
-            <Button Content="Log" Command="{Binding NavigateCommand}" CommandParameter="Log" Margin="5"/>
-            <CheckBox Content="Use ThroughPass" IsChecked="{Binding UseThroughPass, Mode=TwoWay}" Margin="5" />
-        </StackPanel>
+        <!-- 側邊欄 -->
+        <DockPanel Background="{StaticResource SidebarBrush}">
+            <StackPanel DockPanel.Dock="Top" Margin="18,20,12,18">
+                <TextBlock Text="Translation Gateway" Foreground="White" FontSize="15" FontWeight="SemiBold"/>
+                <TextBlock Text="日翻中即時字幕" Foreground="{StaticResource SidebarMutedBrush}" FontSize="12" Margin="0,2,0,0"/>
+            </StackPanel>
+
+            <StackPanel DockPanel.Dock="Bottom" Margin="18,10,12,16">
+                <CheckBox IsChecked="{Binding AutoUpdatePotPlayerSubtitle, Mode=TwoWay}"
+                          Foreground="{StaticResource SidebarTextBrush}"
+                          Margin="0,0,0,6"
+                          ToolTip="前處理有進度時把整理過的字幕交給 PotPlayer；會蓋掉 YouTube 原本的字幕軌，想看原本的字幕軌時取消勾選">
+                    <TextBlock Text="自動更新 PotPlayer 字幕" Foreground="{StaticResource SidebarTextBrush}"/>
+                </CheckBox>
+                <CheckBox IsChecked="{Binding UseThroughPass, Mode=TwoWay}"
+                          Foreground="{StaticResource SidebarTextBrush}"
+                          ToolTip="勾選後字幕直接原文回傳，不送模型（除錯用）">
+                    <TextBlock Text="直通模式（不翻譯）" Foreground="{StaticResource SidebarTextBrush}"/>
+                </CheckBox>
+                <!-- 知識庫模型健康狀態：被標記時顯示改用翻譯模型的提示（空字串時收合） -->
+                <TextBlock Text="{Binding LorebookHealthText}" Foreground="{StaticResource ErrorTextBrush}"
+                           FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"
+                           ToolTip="知識庫模型連續失敗時暫時改用翻譯模型">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding LorebookHealthText}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock Text="{Binding ModelSummary}" Foreground="{StaticResource SidebarMutedBrush}"
+                           FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"
+                           ToolTip="目前使用的模型與端點（設定頁可修改）"/>
+                <TextBlock Text="{Binding AppVersion}" Foreground="{StaticResource SidebarMutedBrush}"
+                           FontSize="11" Margin="0,6,0,0"
+                           ToolTip="程式版本與建置時的 git commit"/>
+            </StackPanel>
+
+            <StackPanel>
+                <Button Style="{StaticResource NavButton}" Tag="{Binding IsDashboardPage}"
+                        Command="{Binding NavigateCommand}" CommandParameter="Dashboard">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE7F4;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="字幕監看" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource NavButton}" Tag="{Binding IsGlossaryPage}"
+                        Command="{Binding NavigateCommand}" CommandParameter="Glossary">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE82D;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="知識庫" VerticalAlignment="Center"/>
+                        <!-- 待審數量（(n)／(99+)；空字串時收合） -->
+                        <TextBlock Text="{Binding GlossaryBadgeText}" VerticalAlignment="Center" Margin="6,0,0,0"
+                                   Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding GlossaryBadgeText}" Value="">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource NavButton}" Tag="{Binding IsMishearingPage}"
+                        Command="{Binding NavigateCommand}" CommandParameter="Mishearing">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8AC;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="聽錯字修正" VerticalAlignment="Center"/>
+                        <!-- 待審數量（(n)／(99+)；空字串時收合） -->
+                        <TextBlock Text="{Binding MishearingBadgeText}" VerticalAlignment="Center" Margin="6,0,0,0"
+                                   Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding MishearingBadgeText}" Value="">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource NavButton}" Tag="{Binding IsSettingsPage}"
+                        Command="{Binding NavigateCommand}" CommandParameter="Settings">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE713;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="設定" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource NavButton}" Tag="{Binding IsLogPage}"
+                        Command="{Binding NavigateCommand}" CommandParameter="Log">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="系統記錄" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource NavButton}"
+                        Command="{Binding OpenStreamCommand}"
+                        ToolTip="讀取剪貼簿的 YouTube／Twitch 網址：直播用 streamlink，YouTube 錄影直接用 PotPlayer 開啟">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE768;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="開啟影片／直播" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <TextBlock Text="{Binding StreamStatus}" Foreground="{StaticResource SidebarMutedBrush}"
+                           FontSize="11" TextWrapping="Wrap" Margin="18,4,12,0"/>
+                <!-- 開台資料探勘等待中（只設定翻譯模型時）的中斷按鈕：取消探勘、馬上啟動 PotPlayer -->
+                <Button Content="中斷探勘，直接播放" Command="{Binding SkipStreamMiningCommand}"
+                        FontSize="11" Padding="6,2" Margin="18,4,12,0" HorizontalAlignment="Left"
+                        ToolTip="取消開台資料探勘，馬上開始播放（已建好的卡會保留）"
+                        Visibility="{Binding IsWaitingForStreamMining, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+            </StackPanel>
+        </DockPanel>
 
         <ContentControl Grid.Column="1" Content="{Binding CurrentView}">
             <ContentControl.Resources>
@@ -27,16 +156,16 @@
                     <v:DashboardView/>
                 </DataTemplate>
 
-                <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
-                    <v:SettingsView/>
+                <DataTemplate DataType="{x:Type vm:GlossaryReviewViewModel}">
+                    <v:GlossaryReviewView/>
                 </DataTemplate>
 
-                <DataTemplate DataType="{x:Type vm:ChatViewModel}">
-                    <v:ChatView/>
+                <DataTemplate DataType="{x:Type vm:MishearingReviewViewModel}">
+                    <v:MishearingReviewView/>
                 </DataTemplate>
-                
-                <DataTemplate DataType="{x:Type vm:KnowledgeViewModel}">
-                    <v:KnowledgeView/>
+
+                <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                    <v:SettingsView/>
                 </DataTemplate>
 
                 <DataTemplate DataType="{x:Type vm:LogViewModel}">
@@ -44,5 +173,54 @@
                 </DataTemplate>
             </ContentControl.Resources>
         </ContentControl>
+
+        <!-- 提示框疊層：綁定 ToastService.Items，只在 Gateway 視窗內顯示（不用系統通知） -->
+        <ItemsControl Grid.Column="1" Panel.ZIndex="20" ItemsSource="{Binding Toasts.Items}"
+                      HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="16" Width="340"
+                      IsHitTestVisible="True">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Orientation="Vertical"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" CornerRadius="6" Margin="0,0,0,8" Padding="12,10"
+                            SnapsToDevicePixels="True">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="14" Opacity="0.2" Direction="270"/>
+                        </Border.Effect>
+                        <Grid>
+                            <Border Width="4" CornerRadius="2" HorizontalAlignment="Left" Margin="-12,-10,0,-10"
+                                    Background="{StaticResource ErrorTextBrush}" Visibility="Collapsed">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsError}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            </Border>
+                            <DockPanel Margin="6,0,0,0">
+                                <Button DockPanel.Dock="Right" Content="×" Padding="6,0" FontSize="12" Margin="6,0,-4,0"
+                                        Command="{Binding DataContext.Toasts.DismissCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding}"
+                                        ToolTip="關閉提示" AutomationProperties.Name="關閉提示"/>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{StaticResource TextBrush}"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Message}" Foreground="{StaticResource SubTextBrush}" FontSize="12"
+                                               TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
     </Grid>
 </Window>

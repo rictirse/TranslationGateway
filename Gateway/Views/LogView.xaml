@@ -4,8 +4,13 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignHeight="450" d:DesignWidth="800">
-    <TabControl>
-        <TabItem Header="System Logs">
+    <DockPanel Margin="16,14,16,12">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="系統記錄" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="程式記錄與送給模型的原始請求／回應（除錯用）" Style="{StaticResource Hint}" Margin="0,2,0,0"/>
+        </StackPanel>
+    <TabControl Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}">
+        <TabItem Header="程式記錄">
             <DataGrid ItemsSource="{Binding UiLogs.Items}" 
                       IsReadOnly="True" AutoGenerateColumns="False" 
                       HeadersVisibility="Column" CanUserAddRows="False">
@@ -13,12 +18,18 @@
                     <DataGridTextColumn Header="Time" Binding="{Binding Time, StringFormat={}{0:HH:mm:ss.fff}}" Width="110" />
                     <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80" />
                     <DataGridTextColumn Header="Source" Binding="{Binding Category}" Width="120" />
-                    <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                    <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="TextWrapping" Value="Wrap"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
                 </DataGrid.Columns>
             </DataGrid>
         </TabItem>
 
-        <TabItem Header="API Traces (Sakura/Ollama)">
+        <TabItem Header="API 請求紀錄">
             <DataGrid ItemsSource="{Binding ApiTraces.Items}" 
                       IsReadOnly="True" AutoGenerateColumns="False" 
                       HeadersVisibility="Column" CanUserAddRows="False">
@@ -43,4 +54,5 @@
             </DataGrid>
         </TabItem>
     </TabControl>
+    </DockPanel>
 </UserControl>

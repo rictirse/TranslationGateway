@@ -18,12 +18,12 @@ public class TranslationTool
     [Description("呼叫本地翻譯引擎將日文轉換為繁體中文，支援語境分析。")]
     public async Task<string> TranslateText(
         [Description("目前要翻譯的文字")] string current,
-        [Description("上下文內容，可空白")] string? context = null)
+        [Description("上下文內容，可空白")] string[]? context = null)
     {
 
         PotplayerRequest request = new PotplayerRequest
         {
-            Context = context ?? string.Empty,
+            Context = context ?? Array.Empty<string>(),
             Current = current
         };
 

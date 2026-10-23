@@ -1,0 +1,395 @@
+<UserControl x:Class="Translation.Gateway.Views.GlossaryReviewView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d" d:DesignHeight="600" d:DesignWidth="900">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <!-- 欄位輸入框：統一上下間距（與其他頁一致） -->
+        <Style x:Key="FieldBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="Margin" Value="0,4"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- 鍵盤快速鍵：核准／拒絕／儲存（cell 編輯中的按鍵由編輯框優先處理） -->
+    <UserControl.InputBindings>
+        <KeyBinding Modifiers="Control" Key="Enter" Command="{Binding ApproveSelectedTermsCommand}"/>
+        <KeyBinding Modifiers="Control" Key="Delete" Command="{Binding RejectSelectedTermsCommand}"/>
+        <KeyBinding Modifiers="Control" Key="S" Command="{Binding SaveCommand}"/>
+    </UserControl.InputBindings>
+
+    <Grid Margin="16,14,16,12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 標題與提示 -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <TextBlock Text="詞彙卡" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="雲端 AI 整理的詞彙卡與名詞。核准或拒絕後按儲存；被拒絕的不會進 prompt。"
+                       Style="{StaticResource Hint}" Margin="0,2,0,0"/>
+        </StackPanel>
+
+        <!-- 主內容：左欄卡片清單、右欄卡片資訊與名詞表 -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左欄：搜尋、篩選與卡片清單 -->
+            <DockPanel Grid.Column="0">
+                <TextBox DockPanel.Dock="Top" Margin="0,0,0,6"
+                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Delay=250}"
+                         ToolTip="搜尋卡名或卡內名詞（不分大小寫、全半形與平假名片假名互通）"/>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                    <ComboBox Width="86" HorizontalAlignment="Left"
+                              ItemsSource="{Binding KindFilterOptions}" SelectedItem="{Binding KindFilter}"
+                              ToolTip="依卡片種類篩選"/>
+                    <ComboBox Margin="6,0,0,0"
+                              ItemsSource="{Binding CardStatusFilterOptions}" SelectedItem="{Binding CardStatusFilter}"
+                              ToolTip="依待審名詞或卡片狀態篩選"/>
+                </DockPanel>
+                <ListBox ItemsSource="{Binding Cards}" SelectedItem="{Binding SelectedCard}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ToolTip="生效中的卡顯示 ●；被拒絕的卡以灰字顯示">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Margin" Value="0"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Indent}" Value="True">
+                                                <Setter Property="Margin" Value="16,0,0,0"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Status}" Value="Rejected">
+                                                        <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="●" FontSize="10" Margin="5,1,0,0" VerticalAlignment="Center"
+                                               Foreground="{StaticResource SuccessTextBrush}"
+                                               ToolTip="生效中"
+                                               Visibility="{Binding IsActive, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <!-- 右欄 -->
+            <DockPanel Grid.Column="2">
+                <GroupBox DockPanel.Dock="Top" Header="卡片資訊">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="70"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="名稱" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding SelectedCard.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="種類" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedCard.KindText}"
+                                   Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="0,4"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="上層" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox Grid.Row="2" Grid.Column="1" Margin="0,4"
+                                  ItemsSource="{Binding ParentOptions}" DisplayMemberPath="Name"
+                                  SelectedValuePath="Id"
+                                  SelectedValue="{Binding SelectedCard.ParentId, Mode=TwoWay}"
+                                  ToolTip="角色卡所屬的團體卡"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="@handle" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Grid.Row="3" Grid.Column="1" Style="{StaticResource FieldBox}"
+                                 Text="{Binding SelectedCard.ChannelHandle, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="別名" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Grid.Row="4" Grid.Column="1" Style="{StaticResource FieldBox}" Height="56"
+                                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                 ToolTip="一行一個，例如 APEX、エペ。開台時用來比對直播標題（遊戲卡）"
+                                 Text="{Binding SelectedCard.Aliases, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="來源網址" Style="{StaticResource FieldLabel}"/>
+                        <DockPanel Grid.Row="5" Grid.Column="1">
+                            <Button DockPanel.Dock="Right" Content="開啟" Margin="6,4,0,4" Padding="8,1"
+                                    Click="OpenSourceUrl_Click" ToolTip="用瀏覽器開啟來源網址"/>
+                            <TextBox Style="{StaticResource FieldBox}"
+                                     Text="{Binding SelectedCard.SourceUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                        </DockPanel>
+
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="說明" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Grid.Row="6" Grid.Column="1" Style="{StaticResource FieldBox}" Height="56"
+                                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                 Text="{Binding SelectedCard.Description, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="狀態" Style="{StaticResource FieldLabel}"/>
+                        <DockPanel Grid.Row="7" Grid.Column="1" Margin="0,4">
+                            <TextBlock Text="{Binding SelectedCard.StatusText}" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource WarnTextBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedCard.Status}" Value="Approved">
+                                                <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding SelectedCard.Status}" Value="Rejected">
+                                                <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <Button DockPanel.Dock="Right" Content="拒絕整張卡" Margin="6,0,0,0"
+                                    Command="{Binding RejectCardCommand}"
+                                    ToolTip="卡片狀態改成已拒絕（名詞不動）；資料探勘之後比對到這張卡的名稱就不再建卡"/>
+                            <Button DockPanel.Dock="Right" Content="核准整張卡" Margin="6,0,0,0"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding ApproveCardCommand}"
+                                    ToolTip="卡片與所有待審名詞一起核准；已拒絕的名詞不動"/>
+                            <Button DockPanel.Dock="Right" Content="刪除整張卡" Margin="6,0,0,0"
+                                    Foreground="{StaticResource ErrorTextBrush}"
+                                    Command="{Binding DeleteCardCommand}"
+                                    ToolTip="從資料庫刪掉這張卡與它的名詞（立即寫入，無法復原）"/>
+                            <Button DockPanel.Dock="Right" Content="合併到…" Margin="6,0,0,0"
+                                    Command="{Binding ToggleMergePanelCommand}"
+                                    ToolTip="把這張卡併進一張既有的卡（名詞衝突以既有卡為主），合併後刪除這張"/>
+                        </DockPanel>
+                    </Grid>
+                </GroupBox>
+                <!-- 合併面板：搜尋既有卡、挑目標卡、確認合併（樣式比照貼上資料整理面板） -->
+                <StackPanel DockPanel.Dock="Top" Margin="0,6"
+                            Visibility="{Binding IsMergePanelOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,2"
+                               Text="把這張卡併進既有的卡：名詞衝突以既有卡為主，搬過去的改成待審，卡名變成別名，合併後這張卡會刪除"/>
+                    <TextBox Text="{Binding MergeSearchText, UpdateSourceTrigger=PropertyChanged, Delay=250}"
+                             ToolTip="搜尋要併入的卡（卡名、別名、名詞）"/>
+                    <ListBox Margin="0,6,0,0" Height="160"
+                             ItemsSource="{Binding MergeCandidates}" SelectedItem="{Binding MergeTarget}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ToolTip="搜尋文字是空的時，列出與這張卡同種類的卡">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Hint}"/>
+                                        <TextBlock Text="{Binding StatusText}" Style="{StaticResource Hint}" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <DockPanel Margin="0,6,0,0">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button Content="合併" Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding MergeCardCommand}"
+                                    ToolTip="立即合併並寫進資料庫：開台紀錄改成指向目標卡，這張卡會刪除"/>
+                            <Button Content="取消" Margin="6,0,0,0" Command="{Binding ToggleMergePanelCommand}"
+                                    ToolTip="關閉合併面板"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                   Text="合併立即寫進資料庫（不經「儲存」），執行前會再確認"/>
+                    </DockPanel>
+                </StackPanel>
+                <!-- 名詞表 -->
+                <GroupBox Header="名詞">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <Button DockPanel.Dock="Left" Content="貼上資料整理…"
+                                    Command="{Binding ToggleImportPanelCommand}"
+                                    ToolTip="貼上網路資料（英雄列表、譯名對照表等），由知識庫模型整理成名詞加進這張卡；存檔前不寫入資料庫"/>
+                            <TextBox Width="180" Margin="8,0,0,0" HorizontalAlignment="Right"
+                                     Text="{Binding TermSearchText, UpdateSourceTrigger=PropertyChanged, Delay=250}"
+                                     ToolTip="搜尋這張卡的名詞（原文／譯名／別名）"/>
+                            <ComboBox Width="86" HorizontalAlignment="Right"
+                                      ItemsSource="{Binding TermStatusFilterOptions}"
+                                      SelectedItem="{Binding TermStatusFilter}"
+                                      ToolTip="依名詞狀態篩選"/>
+                        </DockPanel>
+                        <!-- 貼上資料整理面板：說明、貼上內容、整理／取消與進度 -->
+                        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,6"
+                                    Visibility="{Binding IsImportPanelOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,2"
+                                       Text="說明（選填），例如：LoL 英雄列表，左邊日文、右邊台服譯名"/>
+                            <TextBox Text="{Binding ImportInstruction, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="例如：LoL 英雄列表，左邊日文、右邊台服譯名"/>
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,2" Text="貼上資料"/>
+                            <TextBox Height="160" AcceptsReturn="True" AcceptsTab="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding ImportText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="貼上網路資料（英雄列表、譯名對照表、用語表等），上限 30000 字"/>
+                            <DockPanel Margin="0,6,0,0">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Content="整理" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding ImportTermsCommand}"
+                                            ToolTip="由知識庫模型整理成名詞，以未存檔的新列加進這張卡"/>
+                                    <Button Content="取消" Margin="6,0,0,0" Command="{Binding CancelImportCommand}"
+                                            ToolTip="取消進行中的整理"/>
+                                </StackPanel>
+                                <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center"
+                                           Text="{Binding ImportText.Length, StringFormat={}{0} / 30000, Mode=OneWay}"/>
+                            </DockPanel>
+                            <TextBlock Text="{Binding ImportStatusText}" Style="{StaticResource Hint}"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <DockPanel DockPanel.Dock="Bottom" Margin="0,6,0,0">
+                            <Button DockPanel.Dock="Left" Content="刪除" Foreground="{StaticResource ErrorTextBrush}"
+                                    Command="{Binding DeleteSelectedTermsCommand}"
+                                    ToolTip="從資料庫刪除勾選的名詞（沒有勾選時刪除目前選取的列）；確認後立即刪除，無法復原。只是不想用的話請改按「拒絕」"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Command="{Binding ToggleSelectAllCommand}"
+                                        ToolTip="全選／全不選目前顯示的名詞（被篩選掉的不受影響）">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="Content" Value="全選"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding AllVisibleSelected}" Value="True">
+                                                    <Setter Property="Content" Value="全不選"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Content="改回待審" Margin="6,0,0,0" Command="{Binding ResetSelectedTermsCommand}"/>
+                                <Button Content="拒絕" Margin="6,0,0,0" Command="{Binding RejectSelectedTermsCommand}"/>
+                                <Button Content="核准" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding ApproveSelectedTermsCommand}"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                       Text="預設全選；勾選後按核准／拒絕批次調整（沒有勾選時作用在選取的那一列）：Ctrl+Enter 核准、Ctrl+Delete 拒絕、Ctrl+S 儲存"/>
+                        </DockPanel>
+                        <DataGrid ItemsSource="{Binding VisibleTerms}" SelectedItem="{Binding SelectedTerm}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                                  CanUserSortColumns="False" CanUserReorderColumns="False"
+                                  IsReadOnly="False"
+                                  ToolTip="原文、譯名、分類、別名、備註可直接編輯；有修改的列以粗體顯示">
+                            <!-- Delete 刪除勾選（或選取）的名詞；儲存格編輯中時按鍵由編輯框優先處理，不會觸發 -->
+                            <DataGrid.InputBindings>
+                                <KeyBinding Key="Delete" Command="{Binding DeleteSelectedTermsCommand}"/>
+                            </DataGrid.InputBindings>
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsDirty}" Value="True">
+                                            <Setter Property="FontWeight" Value="SemiBold"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <!-- 範本欄的 CheckBox 單擊即切換，不必先選取列或進入編輯模式；標頭核選全選／全不選 -->
+                                <DataGridTemplateColumn Header="選" Width="34">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                    <DataGridTemplateColumn.HeaderTemplate>
+                                        <DataTemplate>
+                                            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsChecked="{Binding DataContext.AllVisibleSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                      ToolTip="全選／全不選目前顯示的名詞"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.HeaderTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="原文" Width="*"
+                                                    Binding="{Binding Path=Source, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <DataGridTextColumn Header="譯名" Width="*"
+                                                    Binding="{Binding Path=Target, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <DataGridTextColumn Header="分類" Width="80"
+                                                    Binding="{Binding Path=Category, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <DataGridTextColumn Header="別名" Width="*"
+                                                    Binding="{Binding Path=Aliases, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <DataGridTextColumn Header="備註" Width="*"
+                                                    Binding="{Binding Path=Note, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <DataGridTemplateColumn Header="狀態" Width="52" IsReadOnly="True">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding StatusText}" FontSize="12">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource WarnTextBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Approved">
+                                                                <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Rejected">
+                                                                <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </GroupBox>
+            </DockPanel>
+        </Grid>
+
+        <!-- 底板：狀態訊息與儲存／復原 -->
+        <DockPanel Grid.Row="2" Margin="0,10,0,0">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button Content="套用到翻譯" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding ApplyToTranslationCommand}"
+                        Visibility="{Binding NeedsApplyToTranslation, Converter={StaticResource BooleanToVisibilityConverter}}"
+                        ToolTip="重建 prompt、重置對話並預熱（儲存的卡生效中時才需要）"/>
+                <Button Content="復原" Margin="6,0,0,0" Command="{Binding RevertCommand}"
+                        ToolTip="重新從資料庫載入，放棄所有未儲存的變更"/>
+                <Button Content="儲存" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding SaveCommand}"/>
+            </StackPanel>
+            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis"/>
+            <TextBlock VerticalAlignment="Center" Margin="10,0,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource Hint}">
+                        <Setter Property="Visibility" Value="Visible"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasUnsavedChanges}" Value="False">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+                <TextBlock.Text>
+                    <Binding Path="DirtyCount" StringFormat="{}{0} 筆變更未儲存"/>
+                </TextBlock.Text>
+            </TextBlock>
+        </DockPanel>
+    </Grid>
+</UserControl>
