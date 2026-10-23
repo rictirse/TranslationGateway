@@ -28,7 +28,8 @@ PotPlayer 用語音辨識（Whisper）或讀取 YouTube 字幕，把每一句送
 | 項目 | 說明 |
 | --- | --- |
 | Windows 10/11 x64 | Gateway 是 WPF 程式 |
-| [.NET 10 SDK](https://dotnet.microsoft.com/download) | 從原始碼建置時需要（只執行發布版本的話，裝 Desktop Runtime 即可） |
+| [.NET 10 Desktop Runtime 與 ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) | 執行 Release 的 zip 需要（下載 x64 安裝程式） |
+| [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | 只有從原始碼建置時需要 |
 | [PotPlayer](https://potplayer.tv/) 64 位元 | 播放器與語音辨識 |
 | [streamlink](https://streamlink.github.io/) | 只有看直播需要 |
 | OpenAI 相容的 LLM 端點 | 例如 llama.cpp server、vLLM、Ollama、LM Studio（`/v1/chat/completions`） |

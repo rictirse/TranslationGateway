@@ -28,7 +28,8 @@ PotPlayer recognizes speech (Whisper) or loads YouTube captions, sends each line
 | Item | Notes |
 | --- | --- |
 | Windows 10/11 x64 | The Gateway is a WPF app |
-| [.NET 10 SDK](https://dotnet.microsoft.com/download) | To build from source (the Desktop Runtime is enough to run a published build) |
+| [.NET 10 Desktop Runtime and ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) | Needed to run the release zip (x64 installers) |
+| [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | Only to build from source |
 | [PotPlayer](https://potplayer.tv/) 64-bit | Player and speech recognition |
 | [streamlink](https://streamlink.github.io/) | Needed only for live streams |
 | An OpenAI-compatible LLM endpoint | For example llama.cpp server, vLLM, Ollama or LM Studio (`/v1/chat/completions`) |
