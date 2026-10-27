@@ -134,6 +134,8 @@ public partial class App : Application
                 services.AddSingleton<ISubtitleLogStore>(sp => (ISubtitleLogStore)sp.GetRequiredService<ITranslationStore>());
                 services.AddSingleton<ICaptionStore>(sp => (ICaptionStore)sp.GetRequiredService<ITranslationStore>());
                 services.AddSingleton<IAuditStore>(sp => (IAuditStore)sp.GetRequiredService<ITranslationStore>());
+                // 影片章節（video_chapters）：重開同一支影片直接用存的章節與譯名，不重抓留言、不重翻
+                services.AddSingleton<IVideoChapterStore>(sp => (IVideoChapterStore)sp.GetRequiredService<ITranslationStore>());
                 // prompt 版本化：啟動時寫入各種預設 prompt，直播 system prompt 改由 DB 版本提供
                 // （appVersion 照 MainViewModel.AppVersion 的方式取組件的 InformationalVersion）
                 services.AddSingleton(sp => new PromptTemplateRegistry(
@@ -187,6 +189,20 @@ public partial class App : Application
                 services.AddSingleton<IYouTubeCaptionProvider>(sp => new YouTubeCaptionClient(
                     new HttpClient(),
                     sp.GetRequiredService<ILogger<YouTubeCaptionClient>>()));
+                // YouTube 熱門留言（章節來源）：匿名呼叫 InnerTube next API，照 YouTubeCaptionClient 直接 new HttpClient
+                services.AddSingleton<IYouTubeCommentProvider>(sp => new YouTubeCommentClient(
+                    new HttpClient(),
+                    sp.GetRequiredService<ILogger<YouTubeCommentClient>>()));
+                // 原曲長度（章節名稱顯示多久）：查 LRCLIB，照其他 HTTP 用戶端直接 new HttpClient
+                services.AddSingleton<ISongInfoProvider>(sp => new LrclibClient(
+                    new HttpClient(),
+                    sp.GetRequiredService<ILogger<LrclibClient>>()));
+                // 影片章節：留言 → ChapterExtractor 整理成章節，記憶體快取 30 分鐘（GET /chapters 用）
+                services.AddSingleton<VideoChapterService>();
+                // 錄影章節名稱疊加：章節標題翻譯與其狀態（singleton 一處共用），
+                // PotPlayerSubtitlePusher 推字幕時把目前章節名加進 SRT 左上角
+                services.AddSingleton<ChapterTitleTranslator>();
+                services.AddSingleton<ChapterOverlayState>();
                 services.AddSingleton<CaptionTrackState>();
                 // YouTube 字幕下載（一鍵開台與 PotPlayer 腳本通知共用）
                 services.AddSingleton<CaptionLoader>();
@@ -210,17 +226,27 @@ public partial class App : Application
                         sp.GetRequiredService<IPotPlayerSubtitleLoader>(),
                         isEnabled: () => settingsService.Current.AutoUpdatePotPlayerSubtitle,
                         outputDirectory: Path.Combine(
-                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TranslationGateway", "subtitles"),
-                        logger: sp.GetRequiredService<ILogger<PotPlayerSubtitlePusher>>());
+                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Translation.Gateway", "subtitles"),
+                        logger: sp.GetRequiredService<ILogger<PotPlayerSubtitlePusher>>(),
+                        chapterOverlay: sp.GetRequiredService<ChapterOverlayState>(),
+                        vodSettings: () => settingsService.Current.Vod,
+                        playbackClock: sp.GetRequiredService<IPlaybackClock>());
                 });
+                // 錄影時的字幕監看高亮：記住最近推送給 PotPlayer 的字幕行（DashboardViewModel 依播放位置找目前那一句）；
+                // 建構子訂閱 Pushed，這裡註冊成 singleton 一處共用（播放位置用上面已註冊的 IPlaybackClock）
+                services.AddSingleton(sp => new PlaybackLineTracker(
+                    sp.GetRequiredService<PotPlayerSubtitlePusher>()));
                 // 正在執行的預先翻譯批次：即時翻譯要翻的句子在批次裡時，等批次完成後直接用快取
                 // （TranslationManager 與 VodPrefetcher 共用；VodPrefetcher 已依賴 TranslationManager，
                 //   獨立一個類別避免 DI 循環）
                 services.AddSingleton<PrefetchInFlight>();
                 // 錄影預先翻譯：訂閱 PotPlayerSubtitlePusher.Pushed，把播放位置之後的字幕行批次翻好寫進翻譯快取
                 services.AddSingleton<VodPrefetcher>();
-                // 翻譯時參考 YouTube 字幕：問 PotPlayer 播放位置，在同時段找最像的字幕放進 user prompt
-                services.AddSingleton<IPlaybackClock, PotPlayerClock>();
+                // 翻譯時參考 YouTube 字幕：問 PotPlayer 播放位置，在同時段找最像的字幕放進 user prompt；
+                // 跳轉（歌曲清單點歌）與查詢位置共用同一個 PotPlayerClock（找視窗的程式共用）
+                services.AddSingleton<PotPlayerClock>();
+                services.AddSingleton<IPlaybackClock>(sp => sp.GetRequiredService<PotPlayerClock>());
+                services.AddSingleton<IPlaybackSeeker>(sp => sp.GetRequiredService<PotPlayerClock>());
                 services.AddSingleton<CaptionReference>();
                 // 開台前準備 PotPlayer：寫翻譯腳本（port 寫死）與登錄檔設定；安裝目錄不能寫時改用 %LOCALAPPDATA% 的複本，
                 // 複本的 Model／Engine 用目錄連結共用 %APPDATA%\<exe 名稱>（Whisper 模型只放一份）
@@ -236,7 +262,8 @@ public partial class App : Application
                         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Translation.Gateway", "PotPlayer"),
                     sp.GetRequiredService<ILogger<PotPlayerPreparer>>(),
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    new DirectoryJunction()));
+                    new DirectoryJunction(),
+                    loadChaptersHook: ChaptersHookBuilder.LoadTemplate));
                 // 一鍵開台先經 preparer 準備 PotPlayer，再啟動（可能改用複本的路徑）
                 services.AddSingleton(sp => new StreamlinkLauncher(
                     sp.GetRequiredService<IProcessRunner>(),
@@ -260,6 +287,9 @@ public partial class App : Application
                 services.AddSingleton<ReviewCountSignal>();
                 // 貼上資料整理（審核頁手動貼上網路資料 → GLM 整理成名詞提案，存檔前不動資料庫）
                 services.AddSingleton<TermImportService>();
+                // 直播／影片標題翻譯（Dashboard 頁首）：用知識庫模型（沒設定時它自己會改用翻譯模型）；
+                // DashboardViewModel 的建構子選用參數由 DI 自動注入
+                services.AddSingleton<StreamTitleTranslator>();
                 services.AddSingleton<ToastService>();
                 // 知識庫模型與知識來源查詢：各自的 HttpClient 都走 ApiLoggingHandler，
                 // 請求與回應會出現在「系統記錄」頁的 API 追蹤；逾時由 client 自行以 CTS 控制
@@ -339,9 +369,11 @@ public partial class App : Application
     private async Task StartPotPlayerListenerAsync()
     {
         // 建立 PotPlayerSubtitlePusher（DI singleton），讓它開始訂閱前處理句子的變更事件；
-        // 一併建立 VodPrefetcher（訂閱推送事件，開始依播放位置預先翻譯）
+        // 一併建立 VodPrefetcher（訂閱推送事件，開始依播放位置預先翻譯）與 PlaybackLineTracker
+        //（訂閱推送事件，Dashboard 還沒開過也能記住字幕行）
         _ = AppHost.Services.GetRequiredService<PotPlayerSubtitlePusher>();
         _ = AppHost.Services.GetRequiredService<VodPrefetcher>();
+        _ = AppHost.Services.GetRequiredService<PlaybackLineTracker>();
 
         var logger = AppHost.Services.GetRequiredService<ILogger<App>>();
         var endpoint = AppHost.Services.GetRequiredService<GatewayEndpoint>();
@@ -395,6 +427,25 @@ public partial class App : Application
                 var vtt = await AppHost.Services.GetRequiredService<CaptionSubtitleService>()
                     .GetWebVttAsync(videoId, context.RequestAborted);
                 return Results.Text(vtt, "text/vtt; charset=utf-8");
+            });
+
+            // PotPlayer 的章節掛勾（ChaptersHook.as）：說明欄沒有章節時向這裡要從留言整理出的章節
+            //（架構師的掛勾接在 MediaPlayParse - YouTube.as，開片時同步等待，服務端整體逾時 8 秒）
+            app.MapGet("/chapters", async (HttpContext context) =>
+            {
+                var videoId = context.Request.Query["v"].ToString();
+                if (videoId.Length != 11 ||
+                    !videoId.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-' or '_'))
+                {
+                    return Results.BadRequest();
+                }
+
+                var chapters = await AppHost.Services.GetRequiredService<VideoChapterService>()
+                    .GetChaptersAsync(videoId, context.RequestAborted);
+                return Results.Json(chapters
+                    .Select(static chapter => new { time = chapter.StartMs, title = chapter.Title })
+                    .OrderBy(static item => item.time)
+                    .ToList());
             });
         }
 

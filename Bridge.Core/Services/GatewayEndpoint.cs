@@ -8,4 +8,7 @@ public sealed class GatewayEndpoint
 
     /// <summary>/translate 端點的完整 URL；沒有可用 port 時為 null。</summary>
     public string? TranslateUrl => Port > 0 ? $"http://127.0.0.1:{Port}/translate" : null;
+
+    /// <summary>/chapters 端點的完整 URL；沒有可用 port 時為 null。</summary>
+    public string? ChaptersUrl => Port > 0 ? $"http://127.0.0.1:{Port}/chapters" : null;
 }

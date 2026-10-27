@@ -1,5 +1,7 @@
 using CommunityToolkit.Mvvm.Messaging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Translation.Bridge.Core.Interface;
 using Translation.Bridge.Core.Models;
@@ -7,6 +9,9 @@ using Translation.Bridge.Core.Services;
 
 namespace Translation.Bridge.Core.Tests;
 
+// 與 VodPrefetcherTests 綁同一個 collection：兩類都會經靜態的 WeakReferenceMessenger.Default
+// 送 TranslationJob 訊息，平行執行會互相收走對方的訊息（見 TranslationMessengerCollection）
+[Collection("translation-messenger")]
 public class TranslationManagerTests
 {
     private static AppSettings Settings(bool throughPass = false, int timeoutMs = 0, string replacementRules = "", bool conversation = false) => new()
@@ -16,7 +21,7 @@ public class TranslationManagerTests
         Translation = new TranslationSettings { SystemPromptTemplate = "你是翻譯專家", TimeoutMs = timeoutMs, UseConversationMode = conversation }
     };
 
-    private static TranslationManager Create(FakeOpenAiClient client, TempDatabase db, AppSettings settings, TimeProvider? timeProvider = null, PrefetchInFlight? prefetchInFlight = null) =>
+    private static TranslationManager Create(IOpenAiClient client, TempDatabase db, AppSettings settings, TimeProvider? timeProvider = null, PrefetchInFlight? prefetchInFlight = null) =>
         new(client, new TextProcessingService(), db.Service, new FakeSettingsService(settings), timeProvider, prefetchInFlight: prefetchInFlight);
 
     [Fact]
@@ -33,6 +38,94 @@ public class TranslationManagerTests
 
         Assert.Contains("英リサ=英莉莎", client.LastSystemText);
         Assert.Contains("你是翻譯專家", client.LastSystemText);
+    }
+
+    /// <summary>說明欄章節（3 行才會被 ChapterExtractor 視為章節；「0:00 開始」會被去掉，items 剩 2 章）。</summary>
+    private const string ChapterDescription =
+        "0:00 開始\n1:00 10位 星座になれたら ／ 結束バンド\n2:00 09位 Booo! ／ TOKOTOKO";
+
+    /// <summary>組一個以說明欄章節載入的 ChapterOverlayState（假知識庫模型回 llmReply，不連網）。</summary>
+    private static ChapterOverlayState NewChapterOverlay(string llmReply) => new(
+        new VideoChapterService(new EmptyCommentProvider(), NullLogger<VideoChapterService>.Instance),
+        new ChapterTitleTranslator(
+            new StaticReplyLlm(llmReply), new GlossaryState(), new TextProcessingService(),
+            NullLogger<ChapterTitleTranslator>.Instance),
+        NullLogger<ChapterOverlayState>.Instance);
+
+    // PotPlayer 把左上角的章節 cue 送來翻譯：直接回傳疊加已翻好的中文，不送模型、不寫快取。
+    [Fact]
+    public async Task Translate_ChapterTitle_ReturnsOverlayTranslationWithoutModel()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var overlay = NewChapterOverlay("""{"translations": ["第10名 若能成為星座 ／ 結束樂團", "第9名 Booo! ／ TOKOTOKO"]}""");
+        await overlay.LoadAsync("videoC", ChapterDescription, TestContext.Current.CancellationToken);
+        var sut = new TranslationManager(
+            client, new TextProcessingService(), db.Service, new FakeSettingsService(Settings()), chapterOverlay: overlay);
+
+        // PotPlayer 送來的樣子：{\an7\fs12} 標記被去掉、換行變空白
+        var result = await sut.TranslateAsync(
+            new PotplayerRequest { Current = "10位 星座になれたら ／ 結束バンド" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("第10名 若能成為星座 ／ 結束樂團", result);
+        Assert.Equal(0, client.CallCount);
+        Assert.Null(db.Service.GetCache("10位 星座になれたら ／ 結束バンド"));
+    }
+
+    // 章節標題的譯文也經過譯名修正規則（同一般輸出）。
+    [Fact]
+    public async Task Translate_ChapterTitle_AppliesReplacementRules()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var overlay = NewChapterOverlay("""{"translations": ["第10名 若能成為星座 ／ 結束樂團", "第9名 Booo! ／ TOKOTOKO"]}""");
+        await overlay.LoadAsync("videoC", ChapterDescription, TestContext.Current.CancellationToken);
+        var sut = new TranslationManager(
+            client, new TextProcessingService(), db.Service,
+            new FakeSettingsService(Settings(replacementRules: "結束樂團=團結樂團")), chapterOverlay: overlay);
+
+        var result = await sut.TranslateAsync(
+            new PotplayerRequest { Current = "{\\an7\\fs12}10位 星座になれたら ／ 結束バンド" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("第10名 若能成為星座 ／ 團結樂團", result);
+        Assert.Equal(0, client.CallCount);
+    }
+
+    // 不是章節標題（或譯文還沒好）：照一般流程送模型。
+    [Fact]
+    public async Task Translate_ChapterTitleWithoutTranslation_UsesNormalFlow()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        // 整體翻譯失敗（數量不符）：標題命中但譯文是 null
+        var overlay = NewChapterOverlay("""{"translations": []}""");
+        await overlay.LoadAsync("videoC", ChapterDescription, TestContext.Current.CancellationToken);
+        var sut = new TranslationManager(
+            client, new TextProcessingService(), db.Service, new FakeSettingsService(Settings()), chapterOverlay: overlay);
+
+        var result = await sut.TranslateAsync(
+            new PotplayerRequest { Current = "10位 星座になれたら ／ 結束バンド" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, client.CallCount);
+        Assert.Contains("翻譯", result);
+        Assert.NotNull(db.Service.GetCache("10位 星座になれたら ／ 結束バンド"));
+    }
+
+    /// <summary>不連網的假留言提供者：一律回空清單（章節用說明欄時不會被用到）。</summary>
+    private sealed class EmptyCommentProvider : IYouTubeCommentProvider
+    {
+        public Task<IReadOnlyList<YouTubeComment>?> GetTopCommentsAsync(string videoId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<YouTubeComment>?>([]);
+    }
+
+    /// <summary>固定回覆的假知識庫模型（章節標題翻譯用）。</summary>
+    private sealed class StaticReplyLlm(string reply) : ILorebookLlm
+    {
+        public Task<LlmJsonResult> CompleteJsonAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new LlmJsonResult(reply, 1, 1, 1, "fake-glm"));
+
+        public Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult((true, "連線成功"));
     }
 
     // NormalizeSource 的結果就是 TranslateAsync 查快取用的值：寫進快取後 TranslateAsync 命中快取、不叫模型。
@@ -213,6 +306,232 @@ public class TranslationManagerTests
 
         Assert.Equal(1, client.CallCount);
         Assert.NotNull(result);
+    }
+
+    // 這句已有快取、又在進行中的預翻批次裡（批次一直不完成）：不等批次，立刻回快取譯文。
+    [Fact]
+    public async Task Translate_CachedLineInInFlightBatch_ReturnsImmediately()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        db.Service.SaveCache("その前も多分入ってたかな。", "之前大概也有進去吧");
+        var sut = Create(client, db, Settings(timeoutMs: 500), prefetchInFlight: inFlight);
+        var recipient = new object();
+        TranslationJob? received = null;
+        WeakReferenceMessenger.Default.Register<TranslationJob>(recipient, (_, job) => received = job);
+
+        try
+        {
+            using var handle = inFlight.Begin(["その前も多分入ってたかな。"]);
+            var sw = Stopwatch.StartNew();
+            var result = await sut.TranslateAsync(
+                new PotplayerRequest { Current = "その前も多分入ってたかな。" }, TestContext.Current.CancellationToken);
+            sw.Stop();
+
+            Assert.Equal("之前大概也有進去吧", result);
+            Assert.Equal(0, client.CallCount);
+            Assert.NotNull(received);
+            Assert.Equal(TranslationSource.Cache, received.Source);
+            Assert.True(sw.ElapsedMilliseconds < 100, $"快取已有譯文卻等了 {sw.ElapsedMilliseconds} ms");
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.UnregisterAll(recipient);
+        }
+    }
+
+    // ===== 讓路（預翻運作中，推送字幕行沒命中快取時交給預翻處理，不另外送即時模型）=====
+
+    // 讓路：預翻運作中且這句是已知推送字幕行、快取沒命中 → 要求急件並等批次；
+    // 批次把快取寫好後命中快取（與一般快取命中完全相同），模型呼叫次數 0。
+    [Fact]
+    public async Task TranslateAsync_YieldToPrefetch_BatchCachesLine_ReturnsCacheWithoutModel()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetActive(true);
+        inFlight.SetKnownKeys(["こんにちは"]);
+        var sut = Create(client, db, Settings(), prefetchInFlight: inFlight);
+        var recipient = new object();
+        TranslationJob? received = null;
+        WeakReferenceMessenger.Default.Register<TranslationJob>(recipient, (_, job) => received = job);
+
+        try
+        {
+            var translateTask = sut.TranslateAsync(
+                new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+            // 模擬預翻迴圈：取走急件 → 寫好快取 → 含這個 key 的批次結束
+            string? urgentKey = null;
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (urgentKey is null)
+            {
+                urgentKey = inFlight.TakeUrgent();
+                if (urgentKey is not null)
+                {
+                    break;
+                }
+
+                Assert.True(DateTime.UtcNow < deadline, "等不到急件要求");
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Equal("こんにちは", urgentKey);
+            db.Service.SaveCache("こんにちは", "預翻譯文");
+            using (var handle = inFlight.Begin(["こんにちは"]))
+            {
+            }
+
+            var result = await translateTask;
+
+            Assert.Equal("預翻譯文", result);
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.UnregisterAll(recipient);
+        }
+
+        Assert.Equal(0, client.CallCount);
+        Assert.NotNull(received);
+        Assert.Equal(TranslationSource.Cache, received.Source);
+        Assert.Equal("預翻譯文", received.TranslatedText);
+    }
+
+    // 讓路後等到上限仍沒命中：回傳原文、發出與逾時相同的 TIMEOUT Job，不送模型、不寫快取。
+    [Fact]
+    public async Task TranslateAsync_YieldToPrefetch_NoHitWithinLimit_ReturnsOriginalWithTimeoutJob()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetActive(true);
+        inFlight.SetKnownKeys(["こんにちは"]);
+        var sut = Create(client, db, Settings(timeoutMs: 100), prefetchInFlight: inFlight);
+        var recipient = new object();
+        TranslationJob? received = null;
+        WeakReferenceMessenger.Default.Register<TranslationJob>(recipient, (_, job) => received = job);
+
+        try
+        {
+            var result = await sut.TranslateAsync(
+                new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+            Assert.Equal("こんにちは", result);
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.UnregisterAll(recipient);
+        }
+
+        Assert.Equal(0, client.CallCount);
+        Assert.Null(db.Service.GetCache("こんにちは"));
+        Assert.NotNull(received);
+        Assert.Equal(TranslationSource.Timeout, received.Source);
+        Assert.Equal("TIMEOUT", received.SystemPrompt);
+        Assert.Equal("こんにちは", received.TranslatedText);
+    }
+
+    // 不是已知 key（例如 Whisper 字幕）：照常送模型。
+    [Fact]
+    public async Task TranslateAsync_NotKnownKey_SendsModelAsUsual()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetActive(true);
+        inFlight.SetKnownKeys(["別の字幕行"]);
+
+        var result = await Create(client, db, Settings(), prefetchInFlight: inFlight)
+            .TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, client.CallCount);
+        Assert.NotNull(result);
+    }
+
+    // 預翻沒在運作（IsActive false）：即使是已知 key 也照常送模型。
+    [Fact]
+    public async Task TranslateAsync_PrefetchNotActive_SendsModelAsUsual()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetKnownKeys(["こんにちは"]);
+
+        var result = await Create(client, db, Settings(), prefetchInFlight: inFlight)
+            .TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, client.CallCount);
+        Assert.NotNull(result);
+    }
+
+    // ===== 請求紀錄（NoteRequested：預翻運作中的已知推送字幕行被請求時記下時間，供預翻換算提前距離）=====
+
+    // IsActive 而且是已知 key：記錄請求；快取命中也會記錄（不論快取是否命中）。
+    [Fact]
+    public async Task TranslateAsync_ActiveKnownKey_NotifiesRequested_EvenOnCacheHit()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetActive(true);
+        inFlight.SetKnownKeys(["こんにちは"]);
+        db.Service.SaveCache("こんにちは", "快取結果");
+        var sut = Create(client, db, Settings(), prefetchInFlight: inFlight);
+
+        await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(inFlight.TakeRequested());
+        Assert.Equal("こんにちは", request.Key);
+        Assert.Equal(0, client.CallCount);
+    }
+
+    // 不是已知 key：不記錄請求。
+    [Fact]
+    public async Task TranslateAsync_UnknownKey_DoesNotNotifyRequested()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetActive(true);
+        inFlight.SetKnownKeys(["別の字幕行"]);
+
+        await Create(client, db, Settings(), prefetchInFlight: inFlight)
+            .TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+        Assert.Empty(inFlight.TakeRequested());
+        Assert.Equal(1, client.CallCount);
+    }
+
+    // 預翻沒在運作（IsActive false）：已知 key 也不記錄請求。
+    [Fact]
+    public async Task TranslateAsync_PrefetchNotActive_DoesNotNotifyRequested()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var inFlight = new PrefetchInFlight();
+        inFlight.SetKnownKeys(["こんにちは"]);
+
+        await Create(client, db, Settings(), prefetchInFlight: inFlight)
+            .TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+        Assert.Empty(inFlight.TakeRequested());
+        Assert.Equal(1, client.CallCount);
+    }
+
+    // 送模型後 LastLiveModelCallAt 有值（送之前是 null）。
+    [Fact]
+    public async Task TranslateAsync_ModelSend_UpdatesLastLiveModelCallAt()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var sut = Create(client, db, Settings());
+
+        Assert.Null(sut.LastLiveModelCallAt);
+        await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(sut.LastLiveModelCallAt);
     }
 
     [Fact]
@@ -670,13 +989,301 @@ public class TranslationManagerTests
     public async Task Conversation_Timeout_DoesNotAppend()
     {
         using var db = new TempDatabase();
-        var client = new FakeOpenAiClient(delay: TimeSpan.FromSeconds(1));
+        // 逾時後請求改在背景跑完（不取消）：延長延遲確保第二次呼叫時背景仍在進行中
+        var client = new FakeOpenAiClient(delay: TimeSpan.FromSeconds(5));
         var sut = Create(client, db, Settings(timeoutMs: 100, conversation: true));
 
         await sut.TranslateAsync(new PotplayerRequest { Current = "one" }, TestContext.Current.CancellationToken);
         await sut.TranslateAsync(new PotplayerRequest { Current = "two" }, TestContext.Current.CancellationToken);
 
         Assert.Empty(client.LastHistory!);
+    }
+
+    // ===== 逾時不取消：請求在背景跑完（上限 30 秒、同時一筆），完成後寫快取並補進對話歷史 =====
+
+    /// <summary>以 TaskCompletionSource 控制回應時間的假 client：每次呼叫建立一個閘門，
+    /// 由測試決定何時完成（不得真的等 30 秒）。</summary>
+    private sealed class GateOpenAiClient : IOpenAiClient
+    {
+        public int CallCount { get; private set; }
+        public int WarmUpCount { get; private set; }
+        /// <summary>每次模型呼叫的閘門（依呼叫順序）；測試以 TrySetResult／TrySetException 控制回應時間。</summary>
+        public List<TaskCompletionSource<ChatResult>> Gates { get; } = [];
+        /// <summary>每次模型呼叫實際收到的 CancellationToken。</summary>
+        public List<CancellationToken> Tokens { get; } = [];
+        /// <summary>每次 SendChatAsync 帶入的 history 快照，依呼叫順序排列。</summary>
+        public List<IReadOnlyList<ChatTurn>> Histories { get; } = [];
+
+        private TaskCompletionSource<ChatResult> NextGate()
+        {
+            var gate = new TaskCompletionSource<ChatResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Gates.Add(gate);
+            return gate;
+        }
+
+        public Task<ChatResult> SendAsync(string userText, string systemText, CancellationToken cancellationToken, int? maxOutputTokens = null)
+        {
+            CallCount++;
+            Tokens.Add(cancellationToken);
+            return NextGate().Task;
+        }
+
+        public Task<ChatResult> SendChatAsync(string systemText, IReadOnlyList<ChatTurn> history, string userText, CancellationToken cancellationToken, int? maxOutputTokens = null)
+        {
+            CallCount++;
+            Tokens.Add(cancellationToken);
+            Histories.Add(history);
+            return NextGate().Task;
+        }
+
+        public Task WarmUpAsync(string systemText, IReadOnlyList<ChatTurn> history, CancellationToken cancellationToken)
+        {
+            WarmUpCount++;
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>把訊息集中收起來的 spy logger（背景完成沒有回傳值，以 log 作為觀察點）。</summary>
+    private sealed class SpyLogger : ILogger<TranslationManager>
+    {
+        public ConcurrentQueue<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Messages.Enqueue(formatter(state, exception));
+    }
+
+    /// <summary>輪詢直到條件成立（背景完成為非同步）。</summary>
+    private static async Task WaitUntil(Func<bool> condition, string message)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, message);
+            await Task.Delay(10);
+        }
+    }
+
+    /// <summary>以 spy logger 建立待測 manager（背景完成的行為以 log 觀察）。</summary>
+    private static TranslationManager CreateWithLogger(GateOpenAiClient client, TempDatabase db, AppSettings settings, SpyLogger logger) =>
+        new(client, new TextProcessingService(), db.Service, new FakeSettingsService(settings), logger: logger);
+
+    // 1. 模型 TimeoutMs 內回應：行為和現在相同（成功路徑：譯文、快取、歷史照常累積）。
+    [Fact]
+    public async Task Timeout_ModelRespondsInTime_BehavesAsSuccessPath()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var sut = Create(client, db, Settings(timeoutMs: 2000, conversation: true));
+
+        var first = sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 1, "第一句沒有送模型");
+        client.Gates[0].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        Assert.Equal("這是翻譯", await first);
+        Assert.Equal("這是翻譯", db.Service.GetCache("こんにちは"));
+
+        var second = sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 2, "第二句沒有送模型");
+        client.Gates[1].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await second;
+        var turn = Assert.Single(client.Histories[^1]);
+        Assert.Equal(new ChatTurn("こんにちは", "这是翻译"), turn);
+    }
+
+    // 2. 模型超過 TimeoutMs 才回應：呼叫端拿到原文與 TIMEOUT Job；送給模型的 token 沒有被取消；
+    //    背景完成後，快取有譯文、對話歷史多一輪。
+    [Fact]
+    public async Task Timeout_BackgroundCompletes_WritesCacheAndAppendsHistory()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var logger = new SpyLogger();
+        var sut = CreateWithLogger(client, db, Settings(timeoutMs: 50, conversation: true), logger);
+        var recipient = new object();
+        TranslationJob? received = null;
+        WeakReferenceMessenger.Default.Register<TranslationJob>(recipient, (_, job) => received = job);
+
+        try
+        {
+            var result = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+
+            Assert.Equal("こんにちは", result);
+            Assert.NotNull(received);
+            Assert.Equal(TranslationSource.Timeout, received.Source);
+            Assert.Equal("TIMEOUT", received.SystemPrompt);
+            Assert.False(client.Tokens[0].IsCancellationRequested); // 送給模型的 token 沒有被取消
+
+            client.Gates[0].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+            await WaitUntil(() => logger.Messages.Any(m => m.Contains("已寫入快取並補進對話歷史")), "背景完成沒有補記");
+            Assert.Equal("這是翻譯", db.Service.GetCache("こんにちは"));
+
+            var second = sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
+            await WaitUntil(() => client.Gates.Count == 2, "第二句沒有送模型");
+            client.Gates[1].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+            await second;
+            var turn = Assert.Single(client.Histories[^1]);
+            Assert.Equal(new ChatTurn("こんにちは", "这是翻译"), turn);
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.UnregisterAll(recipient);
+        }
+    }
+
+    // 3. 背景請求進行中，又來一句沒命中快取的句子：模型呼叫次數沒有增加；回傳原文與 TIMEOUT Job。
+    [Fact]
+    public async Task BackgroundInProgress_NewUncachedSentence_SkipsModelWithTimeoutJob()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var sut = CreateWithLogger(client, db, Settings(timeoutMs: 50, conversation: true), new SpyLogger());
+        var recipient = new object();
+        var jobs = new List<TranslationJob>();
+        WeakReferenceMessenger.Default.Register<TranslationJob>(recipient, (_, job) => jobs.Add(job));
+
+        try
+        {
+            var first = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+            Assert.Equal("こんにちは", first);
+
+            var second = await sut.TranslateAsync(new PotplayerRequest { Current = "別の文" }, TestContext.Current.CancellationToken);
+
+            Assert.Equal("別の文", second);
+            Assert.Equal(1, client.CallCount); // 模型呼叫次數沒有增加
+            Assert.Equal(2, jobs.Count);
+            Assert.Equal(TranslationSource.Timeout, jobs[1].Source);
+            Assert.Equal("TIMEOUT", jobs[1].SystemPrompt);
+            Assert.Equal("別の文", jobs[1].TranslatedText);
+            Assert.Null(db.Service.GetCache("別の文"));
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.UnregisterAll(recipient);
+        }
+    }
+
+    // 4. 背景請求進行中的快取命中：立刻回傳譯文；背景完成後，歷史順序是「背景那句 → 快取那句」。
+    [Fact]
+    public async Task BackgroundInProgress_CacheHit_ReturnsImmediatelyAndAppendsAfterBackgroundTurn()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var logger = new SpyLogger();
+        var sut = CreateWithLogger(client, db, Settings(timeoutMs: 50, conversation: true), logger);
+        db.Service.SaveCache("次の文", "快取譯文");
+
+        var first = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+        Assert.Equal("こんにちは", first);
+
+        var second = await sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
+        Assert.Equal("快取譯文", second);
+        Assert.Equal(1, client.CallCount); // 快取命中不另外送模型
+
+        client.Gates[0].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await WaitUntil(() => logger.Messages.Any(m => m.Contains("已寫入快取並補進對話歷史")), "背景完成沒有補記");
+
+        var third = sut.TranslateAsync(new PotplayerRequest { Current = "三つ目" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 2, "第三句沒有送模型");
+        client.Gates[1].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await third;
+        Assert.Equal(["こんにちは", "次の文"], client.Histories[^1].Select(t => t.User).ToList());
+    }
+
+    // 5. 背景請求失敗：不寫快取、不進歷史；暫存的快取命中項目仍然依序記入歷史；之後的句子恢復送模型。
+    [Fact]
+    public async Task BackgroundFails_NoCacheNoHistory_PendingTurnsStillRecorded_ModelResumes()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var logger = new SpyLogger();
+        var sut = CreateWithLogger(client, db, Settings(timeoutMs: 50, conversation: true), logger);
+        db.Service.SaveCache("次の文", "快取譯文");
+
+        var first = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+        Assert.Equal("こんにちは", first);
+
+        var second = await sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
+        Assert.Equal("快取譯文", second);
+
+        client.Gates[0].TrySetException(new InvalidOperationException("模型故障"));
+        await WaitUntil(() => logger.Messages.Any(m => m.Contains("背景完成：結果失敗或不成功")), "背景失敗沒有被處理");
+        Assert.Null(db.Service.GetCache("こんにちは"));
+
+        var third = sut.TranslateAsync(new PotplayerRequest { Current = "三つ目" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 2, "背景結束後沒有恢復送模型");
+        client.Gates[1].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await third;
+
+        // 暫存的快取命中輪次已依序記入歷史（失敗的背景那句不佔一輪）
+        Assert.Equal(["次の文"], client.Histories[^1].Select(t => t.User).ToList());
+    }
+
+    // 6. 背景完成時 system 已改變：只寫快取，不記歷史。
+    [Fact]
+    public async Task BackgroundCompletes_SystemChanged_CachesWithoutHistory()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var logger = new SpyLogger();
+        var settings = Settings(timeoutMs: 50, conversation: true);
+        var sut = CreateWithLogger(client, db, settings, logger);
+
+        var first = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+        Assert.Equal("こんにちは", first);
+
+        settings.StreamSituation = "別の情境"; // system prompt 改變（對話被重置）
+        client.Gates[0].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await WaitUntil(() => logger.Messages.Any(m => m.Contains("已寫入快取") && !m.Contains("對話歷史")), "背景完成沒有寫快取");
+        Assert.Equal("這是翻譯", db.Service.GetCache("こんにちは"));
+
+        var second = sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 2, "第二句沒有送模型");
+        client.Gates[1].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await second;
+        Assert.Empty(client.Histories[^1]); // system 已換：背景那句不記歷史
+    }
+
+    // 7. 背景請求進行中呼叫 WarmUpAsync：不送請求。
+    [Fact]
+    public async Task WarmUp_BackgroundInProgress_DoesNotCallClient()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var logger = new SpyLogger();
+        var sut = CreateWithLogger(client, db, Settings(timeoutMs: 50, conversation: true), logger);
+
+        var first = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+        Assert.Equal("こんにちは", first);
+
+        await sut.WarmUpAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, client.WarmUpCount);
+
+        // 收尾：讓背景請求完成，避免影響後續觀察
+        client.Gates[0].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await WaitUntil(() => logger.Messages.Any(m => m.Contains("已寫入快取")), "背景完成沒有收尾");
+    }
+
+    // 8. TimeoutMs = 0：行為不變（沒有等待逾時，也不產生背景請求）。
+    [Fact]
+    public async Task TimeoutDisabled_NoBackgroundRequest_ModelWaitedToCompletion()
+    {
+        using var db = new TempDatabase();
+        var client = new GateOpenAiClient();
+        var sut = Create(client, db, Settings(timeoutMs: 0, conversation: true));
+
+        var first = sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 1, "第一句沒有送模型");
+        client.Gates[0].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        Assert.Equal("這是翻譯", await first); // 不因逾時回原文
+
+        var second = sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => client.Gates.Count == 2, "第二句沒有送模型");
+        client.Gates[1].TrySetResult(new ChatResult("这是翻译", 1, 1, 2, "fake"));
+        await second;
+        Assert.Equal(2, client.CallCount);
     }
 
     [Fact]
@@ -927,9 +1534,9 @@ public class TranslationManagerTests
 
         await sut.TranslateAsync(new PotplayerRequest { Current = "これで部屋着じゃなかったら" }, TestContext.Current.CancellationToken);
 
-        // 單輪模式已經有 # Current 標題：不再包一層 # 本句，Current 一律是原句
+        // 單輪模式已經有 # Current 標題：不再包一層 # 本句，Current 一律是原句（差一小段 → 一行聽錯提示）
         var text = client.LastUserText!;
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", text);
+        Assert.StartsWith("# 聽錯提示：「これで」應為「ぴんくの」", text);
         Assert.DoesNotContain("# 本句", text);
         Assert.EndsWith(
             "---\n" + PromptBuilder.BuildSingleTurnUserPrompt(new PotplayerRequest { Current = "これで部屋着じゃなかったら" }),
@@ -1905,17 +2512,35 @@ public class TranslationManagerTests
 
         await sut.TranslateAsync(new PotplayerRequest { Current = "これで部屋着じゃなかったら" }, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", client.LastUserText);
-        Assert.Contains("ぴんくの部屋着じゃなかったら", client.LastUserText);
-        // 有參考段落時，本句前面加標題：在參考段落之後、本句原文之前
+        Assert.StartsWith("# 聽錯提示：", client.LastUserText);
+        Assert.Contains("「これで」應為「ぴんくの」", client.LastUserText);
+        // 短提示只有一行，不會被誤翻成前後句：本句前面不加「# 本句」標題
         var text = client.LastUserText!;
-        var labelIndex = text.IndexOf("# 本句（只翻譯這段）", StringComparison.Ordinal);
-        Assert.True(labelIndex > text.IndexOf("# 參考：同一時段的 YouTube 自動字幕", StringComparison.Ordinal));
-        Assert.EndsWith("\n---\n# 本句（只翻譯這段）\nこれで部屋着じゃなかったら", text);
+        Assert.DoesNotContain("# 本句（只翻譯這段）", text);
+        Assert.EndsWith("\n---\nこれで部屋着じゃなかったら", text);
 
         // 多輪歷史存的仍是本句原文（不含參考段落與標題），比照 keywordSection 的作法
         await sut.TranslateAsync(new PotplayerRequest { Current = "次の文" }, TestContext.Current.CancellationToken);
         Assert.Equal(["これで部屋着じゃなかったら"], client.Histories[^1].Select(t => t.User).ToList());
+    }
+
+    // 整段參考（FullHeader 開頭）時仍加「# 本句」標題：在參考段落之後、本句原文之前。
+    [Fact]
+    public async Task CaptionReference_FullSection_ConversationMode_KeepsCurrentLabelAfterSection()
+    {
+        using var db = new TempDatabase();
+        var client = new FakeOpenAiClient();
+        var sut = new TranslationManager(client, new TextProcessingService(), db.Service,
+            new FakeSettingsService(Settings(conversation: true)),
+            captionReference: CreateCaptionReference(new FakePlaybackClock { PositionMs = 55_000 }, "今日はとてもいい天気です"));
+
+        await sut.TranslateAsync(new PotplayerRequest { Current = "今日はいい天気です" }, TestContext.Current.CancellationToken);
+
+        var text = client.LastUserText!;
+        Assert.StartsWith(CaptionReference.FullHeader, text);
+        var labelIndex = text.IndexOf("# 本句（只翻譯這段）", StringComparison.Ordinal);
+        Assert.True(labelIndex > text.IndexOf(CaptionReference.FullHeader, StringComparison.Ordinal));
+        Assert.EndsWith("\n---\n# 本句（只翻譯這段）\n今日はいい天気です", text);
     }
 
     [Fact]
@@ -1938,9 +2563,10 @@ public class TranslationManagerTests
             WeakReferenceMessenger.Default.UnregisterAll(recipient);
         }
 
-        // 直通模式不加 YouTube 字幕參考段落，也不加「# 本句」標題
+        // 直通模式不加 YouTube 字幕參考段落（短提示或整段都沒有），也不加「# 本句」標題
         Assert.NotNull(received);
-        Assert.DoesNotContain("YouTube 自動字幕", received!.UserPrompt);
+        Assert.DoesNotContain(CaptionReference.HintHeader, received!.UserPrompt);
+        Assert.DoesNotContain(CaptionReference.FullHeader, received.UserPrompt);
         Assert.DoesNotContain("# 本句", received.UserPrompt);
     }
 
@@ -1979,18 +2605,17 @@ public class TranslationManagerTests
 
         await sut.TranslateAsync(new PotplayerRequest { Current = "今日はヴァンダルの話" }, TestContext.Current.CancellationToken);
 
-        // 順序：關鍵字詞彙 → YouTube 字幕參考 → 本句標題 → 本句原文，各以 \n---\n 分隔
+        // 順序：關鍵字詞彙 → YouTube 字幕參考（此資料為一行短提示）→ 本句原文，各以 \n---\n 分隔；
+        // 短提示不加「# 本句」標題
         var text = client.LastUserText!;
         var keywordIndex = text.IndexOf("# 參考詞彙", StringComparison.Ordinal);
-        var captionIndex = text.IndexOf("# 參考：同一時段的 YouTube 自動字幕", StringComparison.Ordinal);
-        var labelIndex = text.IndexOf("# 本句（只翻譯這段）", StringComparison.Ordinal);
+        var hintIndex = text.IndexOf(CaptionReference.HintHeader, StringComparison.Ordinal);
         Assert.True(keywordIndex >= 0);
-        Assert.True(captionIndex > keywordIndex);
-        Assert.True(labelIndex > captionIndex);
-        Assert.Contains("\n---\n# 參考：同一時段的 YouTube 自動字幕", text);
+        Assert.True(hintIndex > keywordIndex);
+        Assert.Contains("「話」應為「話らしい」", text);
         Assert.Contains("ヴァンダル=暴徒", text);
-        Assert.Contains("今日はヴァンダルの話らしい", text);
-        Assert.EndsWith("\n---\n# 本句（只翻譯這段）\n今日はヴァンダルの話", text);
+        Assert.DoesNotContain("# 本句（只翻譯這段）", text);
+        Assert.EndsWith("\n---\n今日はヴァンダルの話", text);
     }
 
     // ===== 回溯紀錄（llm_calls）：真 LlmCallRecorder 搭配記憶體 SpyAuditStore；recorder 是 null 的情況由上面既有測試覆蓋 =====
@@ -2089,9 +2714,10 @@ public class TranslationManagerTests
         Assert.Equal("[]", store.Calls[3].History);
     }
 
-    // 4. 逾時：記 1 筆 Timeout。
+    // 4. 逾時（請求不取消、改在背景跑完）：llm_calls 在請求真正結束時記一筆（Outcome=Ok、實際耗時）。
+    // 原行為是逾時即取消並記 Timeout；T-2095 之後請求跑完就是 Ok——依新行為改寫預期。
     [Fact]
-    public async Task LlmCall_Timeout_RecordsOneTimeoutCall()
+    public async Task LlmCall_Timeout_RecordsCallWhenBackgroundRequestCompletes()
     {
         using var db = new TempDatabase();
         var client = new FakeOpenAiClient(delay: TimeSpan.FromSeconds(1));
@@ -2102,16 +2728,22 @@ public class TranslationManagerTests
         var result = await sut.TranslateAsync(new PotplayerRequest { Current = "こんにちは" }, TestContext.Current.CancellationToken);
         await recorder.FlushAsync();
 
+        // 呼叫端在 TimeoutMs 拿到原文；此時請求仍在背景跑，還沒有紀錄
         Assert.Equal("こんにちは", result);
+        Assert.Empty(store.Calls);
+
+        await WaitUntil(() => store.Calls.Count == 1, "背景請求沒有在限期內完成");
+        await recorder.FlushAsync();
+
         var call = Assert.Single(store.Calls);
         Assert.Equal(LlmCallPurposes.LiveTranslation, call.Purpose);
-        Assert.Equal(LlmCallOutcomes.Timeout, call.Outcome);
+        Assert.Equal(LlmCallOutcomes.Ok, call.Outcome);
         Assert.Equal(client.LastUserText, call.UserPrompt); // 單輪模式的 UserPrompt 是整個組好的 prompt
         Assert.Contains("こんにちは", call.UserPrompt);
-        Assert.Null(call.ResponseRaw);
+        Assert.Equal("这是翻译", call.ResponseRaw);
     }
 
-    // 4b. 逾時：TIMEOUT Job 沿用原本的句子編號，llm_calls 的 Timeout 紀錄才對得回字幕紀錄。
+    // 4b. 逾時：TIMEOUT Job 沿用原本的句子編號，背景完成時記錄的 llm_calls（Outcome=Ok）以同一個 job.Id 對回字幕紀錄。
     [Fact]
     public async Task LlmCall_Timeout_TimeoutJobIdMatchesRecordedJobId()
     {
@@ -2130,6 +2762,7 @@ public class TranslationManagerTests
         try
         {
             await sut.TranslateAsync(new PotplayerRequest { Current = source }, TestContext.Current.CancellationToken);
+            await WaitUntil(() => store.Calls.Count == 1, "背景請求沒有在限期內完成");
             await recorder.FlushAsync();
         }
         finally
@@ -2138,7 +2771,7 @@ public class TranslationManagerTests
         }
 
         var call = Assert.Single(store.Calls);
-        Assert.Equal(LlmCallOutcomes.Timeout, call.Outcome);
+        Assert.Equal(LlmCallOutcomes.Ok, call.Outcome);
         Assert.NotNull(timeoutJob);
         Assert.Equal(call.JobId, timeoutJob.Id);
     }

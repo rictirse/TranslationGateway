@@ -2028,4 +2028,100 @@ public class SqliteTranslationStoreTests
             if (File.Exists(_path)) File.Delete(_path);
         }
     }
+
+    // ===== VideoChapters（影片章節：說明欄、留言セトリ或人工貼上的章節與譯名）=====
+
+    [Fact]
+    public void Constructor_CreatesVideoChaptersTableAndIndex()
+    {
+        using var db = new TempDatabase();
+        var path = PathOf(db);
+
+        Assert.Contains("VideoChapters", QueryNames(path, "table"));
+        Assert.Contains("IX_VideoChapters_VideoId", QueryNames(path, "index"));
+    }
+
+    [Fact]
+    public void GetVideoChapters_NoChapters_ReturnsEmpty()
+    {
+        using var db = new TempDatabase();
+
+        Assert.Empty(db.Service.GetVideoChapters("dQw4w9WgXcQ"));
+    }
+
+    [Fact]
+    public void ReplaceVideoChapters_ThenGet_ReturnsSortedRows()
+    {
+        using var db = new TempDatabase();
+
+        // 故意亂序寫入：Get 要依 StartMs 排序
+        db.Service.ReplaceVideoChapters("dQw4w9WgXcQ",
+        [
+            new StoredVideoChapter(120000, "曲B", "譯B", 184000, VideoChapterSources.Comment),
+            new StoredVideoChapter(0, "配信開始", null, null, VideoChapterSources.Comment),
+            new StoredVideoChapter(60000, "曲A", "譯A", null, VideoChapterSources.Comment),
+        ]);
+
+        Assert.Equal(
+        [
+            new StoredVideoChapter(0, "配信開始", null, null, VideoChapterSources.Comment),
+            new StoredVideoChapter(60000, "曲A", "譯A", null, VideoChapterSources.Comment),
+            new StoredVideoChapter(120000, "曲B", "譯B", 184000, VideoChapterSources.Comment),
+        ], db.Service.GetVideoChapters("dQw4w9WgXcQ"));
+    }
+
+    [Fact]
+    public void ReplaceVideoChapters_SameVideo_ReplacesAllRows()
+    {
+        using var db = new TempDatabase();
+        var path = PathOf(db);
+
+        db.Service.ReplaceVideoChapters("dQw4w9WgXcQ",
+        [
+            new StoredVideoChapter(60000, "曲A", "譯A", null, VideoChapterSources.Description),
+            new StoredVideoChapter(120000, "曲B", null, null, VideoChapterSources.Description),
+        ]);
+        // 同一支影片改存人工章節：舊的全部換掉（不是追加）
+        db.Service.ReplaceVideoChapters("dQw4w9WgXcQ",
+        [
+            new StoredVideoChapter(30000, "曲M", null, null, VideoChapterSources.Manual),
+        ]);
+
+        Assert.Equal(
+            [new StoredVideoChapter(30000, "曲M", null, null, VideoChapterSources.Manual)],
+            db.Service.GetVideoChapters("dQw4w9WgXcQ"));
+        using (var conn = new SqliteConnection($"Data Source={path}"))
+        {
+            Assert.Equal(1L, conn.QuerySingle<long>("SELECT COUNT(*) FROM VideoChapters"));
+        }
+
+        // 其他影片不受影響
+        db.Service.ReplaceVideoChapters("aaaaaaaaaaa",
+            [new StoredVideoChapter(0, "別支影片", null, null, VideoChapterSources.Comment)]);
+        Assert.Single(db.Service.GetVideoChapters("aaaaaaaaaaa"));
+        Assert.Single(db.Service.GetVideoChapters("dQw4w9WgXcQ"));
+    }
+
+    [Fact]
+    public void DeleteVideoChapters_RemovesOnlyThatVideo()
+    {
+        using var db = new TempDatabase();
+
+        db.Service.ReplaceVideoChapters("dQw4w9WgXcQ",
+        [
+            new StoredVideoChapter(60000, "曲A", "譯A", 100000, VideoChapterSources.Manual),
+            new StoredVideoChapter(120000, "曲B", null, null, VideoChapterSources.Manual),
+        ]);
+        db.Service.ReplaceVideoChapters("aaaaaaaaaaa",
+            [new StoredVideoChapter(0, "別支影片", null, null, VideoChapterSources.Comment)]);
+
+        db.Service.DeleteVideoChapters("dQw4w9WgXcQ");
+
+        Assert.Empty(db.Service.GetVideoChapters("dQw4w9WgXcQ"));
+        Assert.Single(db.Service.GetVideoChapters("aaaaaaaaaaa"));
+
+        // 不存在的影片：不做事也不丟例外
+        db.Service.DeleteVideoChapters("zzzzzzzzzzz");
+        Assert.Single(db.Service.GetVideoChapters("aaaaaaaaaaa"));
+    }
 }

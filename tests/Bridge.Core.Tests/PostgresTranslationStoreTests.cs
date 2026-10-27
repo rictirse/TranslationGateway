@@ -1553,6 +1553,92 @@ public class PostgresTranslationStoreIntegrationTests : IDisposable
         }
     }
 
+    /// <summary>opt-in：設定 TG_TEST_POSTGRES 時才對真實伺服器測 video_chapters 的建表、欄位註解、Replace／Get／Delete。</summary>
+    [Fact]
+    public async Task VideoChapters_ReplaceGetDelete_AgainstRealServer()
+    {
+        if (string.IsNullOrEmpty(_baseConnectionString))
+        {
+            Assert.Skip("未設定 TG_TEST_POSTGRES，略過 PostgreSQL 整合測試");
+        }
+
+        var schema = $"tg_test_{Guid.NewGuid().ToString("N")[..12]}";
+        _schema = schema;
+        var baseBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString);
+        var settings = new DatabaseSettings
+        {
+            UsePostgres = true,
+            Host = baseBuilder.Host ?? string.Empty,
+            Port = baseBuilder.Port,
+            Database = baseBuilder.Database ?? string.Empty,
+            UserName = baseBuilder.Username ?? string.Empty,
+            Password = baseBuilder.Password ?? string.Empty,
+            Schema = schema,
+        };
+
+        var store = new PostgresTranslationStore(settings, NullLogger<PostgresTranslationStore>.Instance);
+
+        // 查不到回空清單
+        Assert.Empty(store.GetVideoChapters("dQw4w9WgXcQ"));
+
+        // Replace 後 Get：依 start_ms 排序（故意亂序寫入）
+        store.ReplaceVideoChapters("dQw4w9WgXcQ",
+        [
+            new StoredVideoChapter(120000, "曲B", "譯B", 184000, VideoChapterSources.Comment),
+            new StoredVideoChapter(0, "配信開始", null, null, VideoChapterSources.Comment),
+            new StoredVideoChapter(60000, "曲A", "譯A", null, VideoChapterSources.Comment),
+        ]);
+        Assert.Equal(
+        [
+            new StoredVideoChapter(0, "配信開始", null, null, VideoChapterSources.Comment),
+            new StoredVideoChapter(60000, "曲A", "譯A", null, VideoChapterSources.Comment),
+            new StoredVideoChapter(120000, "曲B", "譯B", 184000, VideoChapterSources.Comment),
+        ], store.GetVideoChapters("dQw4w9WgXcQ"));
+
+        // 同一支影片 Replace：舊的全部換掉（不是追加）；其他影片不受影響
+        store.ReplaceVideoChapters("aaaaaaaaaaa",
+            [new StoredVideoChapter(0, "別支影片", null, null, VideoChapterSources.Description)]);
+        store.ReplaceVideoChapters("dQw4w9WgXcQ",
+            [new StoredVideoChapter(30000, "曲M", null, null, VideoChapterSources.Manual)]);
+        Assert.Equal(
+            [new StoredVideoChapter(30000, "曲M", null, null, VideoChapterSources.Manual)],
+            store.GetVideoChapters("dQw4w9WgXcQ"));
+        Assert.Single(store.GetVideoChapters("aaaaaaaaaaa"));
+
+        // Delete：只刪那支影片；不存在的影片不丟例外
+        store.DeleteVideoChapters("dQw4w9WgXcQ");
+        Assert.Empty(store.GetVideoChapters("dQw4w9WgXcQ"));
+        Assert.Single(store.GetVideoChapters("aaaaaaaaaaa"));
+        store.DeleteVideoChapters("zzzzzzzzzzz");
+
+        // 資料表、索引與每個欄位的註解（來自嵌入資源 postgres-schema.sql 的 COMMENT ON）都要存在
+        await using (var conn = new NpgsqlConnection(_baseConnectionString))
+        {
+            await conn.OpenAsync(TestContext.Current.CancellationToken);
+
+            var tables = (await conn.QueryAsync<string>(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
+                new { schema })).ToList();
+            Assert.Contains("video_chapters", tables);
+
+            var indexes = (await conn.QueryAsync<string>(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = @schema AND tablename = 'video_chapters'",
+                new { schema })).ToList();
+            Assert.Contains("ix_video_chapters_video_id", indexes);
+
+            foreach (var column in new[] { "id", "video_id", "start_ms", "title", "translation", "duration_ms", "source", "created_at", "updated_at" })
+            {
+                var comment = await conn.QuerySingleAsync<string?>(
+                    "SELECT col_description(@regclass::regclass, ordinal_position) FROM information_schema.columns " +
+                    "WHERE table_schema = @schema AND table_name = 'video_chapters' AND column_name = @column",
+                    new { regclass = $"{schema}.video_chapters", schema, column });
+                Assert.False(string.IsNullOrWhiteSpace(comment), $"欄位 {column} 沒有註解");
+            }
+
+            Assert.Equal(1L, await conn.QuerySingleAsync<long>($"SELECT count(*) FROM {schema}.video_chapters"));
+        }
+    }
+
     public void Dispose()
     {
         // 只清理自己建立的隨機 schema

@@ -135,11 +135,49 @@ public class MainViewModelTests
             IsLiveNow: true, IsLiveContent: true, IsUpcoming: false,
             null, null, null, []), null);
 
+    [Fact]
+    public void OpenStream_StreamlinkMissing_SetsHelpUrl_AndNextSuccessClearsIt()
+    {
+        RunOnSta(() =>
+        {
+            // 直播頁但沒裝 streamlink：失敗訊息附下載頁，狀態列顯示「前往下載」
+            using var ctx = CreateContext(pageResults: [LiveCheck()]);
+            ctx.Runner.ExistingFiles.Remove(ctx.Settings.Current.Streamlink.StreamlinkPath);
+
+            ctx.MainVm.OpenStreamCommand.Execute(null);
+            PumpUntil(() => !ctx.MainVm.OpenStreamCommand.IsRunning);
+
+            Assert.Contains("找不到 streamlink", ctx.MainVm.StreamStatus);
+            Assert.Equal(StreamlinkLauncher.StreamlinkDownloadUrl, ctx.MainVm.StreamHelpUrl);
+            Assert.Equal("前往下載 streamlink", ctx.MainVm.StreamHelpLabel);
+            Assert.Empty(ctx.Runner.Starts);
+
+            // 「前往下載」按鈕用替換的開網址進入點，網址就是這次失敗的 HelpUrl
+            var openedUrls = new List<string>();
+            ctx.MainVm.OpenUrl = openedUrls.Add;
+            ctx.MainVm.OpenStreamHelpCommand.Execute(null);
+            Assert.Equal([StreamlinkLauncher.StreamlinkDownloadUrl], openedUrls);
+
+            // 下次開台成功（streamlink 裝好了）：按鈕收掉
+            ctx.Runner.ExistingFiles.Add(ctx.Settings.Current.Streamlink.StreamlinkPath);
+            ctx.Page.Results.Enqueue(LiveCheck());
+            ctx.Runner.Results.Enqueue(new ProcessResult(0, StreamMetadataJson, string.Empty, false));
+            ctx.MainVm.OpenStreamCommand.Execute(null);
+            PumpUntil(() => !ctx.MainVm.OpenStreamCommand.IsRunning);
+
+            Assert.Contains("已開啟", ctx.MainVm.StreamStatus);
+            Assert.Null(ctx.MainVm.StreamHelpUrl);
+            Assert.Null(ctx.MainVm.StreamHelpLabel);
+            Assert.Single(ctx.Runner.Starts);
+        });
+    }
+
     // ===== 測試內容組裝 =====
 
     private sealed class OpenStreamContext : IDisposable
     {
         public required string Dir { get; init; }
+        public required SettingsService Settings { get; init; }
         public required ServiceProvider Provider { get; init; }
         public required StubPageProvider Page { get; init; }
         public required FakeRouterHandler Router { get; init; }
@@ -201,6 +239,7 @@ public class MainViewModelTests
         return new OpenStreamContext
         {
             Dir = dir.FullName,
+            Settings = settings,
             Provider = provider,
             Page = page,
             Router = routerHandler,
@@ -235,6 +274,11 @@ public class MainViewModelTests
         services.AddSingleton<CaptionTrackState>();
         services.AddSingleton<IYouTubeCaptionProvider>(new StubCaptionProvider());
         services.AddSingleton<CaptionLoader>();
+        // 章節名稱疊加：MainViewModel 開片時解析 ChapterOverlayState（假的留言查詢不連網，查不到章節）
+        services.AddSingleton<IYouTubeCommentProvider>(new StubCommentProvider());
+        services.AddSingleton<VideoChapterService>();
+        services.AddSingleton<ChapterTitleTranslator>();
+        services.AddSingleton<ChapterOverlayState>();
         services.AddSingleton<CaptionSentenceState>();
         services.AddSingleton<CardReadinessGate>();
         services.AddSingleton<CaptionPreprocessor>();
@@ -276,6 +320,13 @@ public class MainViewModelTests
     }
 
     // ===== 替身（不連網、不啟動外部程式）=====
+
+    /// <summary>不連網的假熱門留言查詢：固定回 null（查不到留言），章節來源只會用說明欄。</summary>
+    private sealed class StubCommentProvider : IYouTubeCommentProvider
+    {
+        public Task<IReadOnlyList<YouTubeComment>?> GetTopCommentsAsync(string videoId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<YouTubeComment>?>(null);
+    }
 
     /// <summary>假的影片頁面查詢：CheckPageAsync 依序回傳排好的結果並計數（每次 LaunchAsync 會查一次）。</summary>
     private sealed class StubPageProvider : IYouTubePageInfoProvider

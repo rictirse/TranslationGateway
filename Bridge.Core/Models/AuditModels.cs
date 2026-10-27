@@ -41,6 +41,8 @@ public static class LlmCallPurposes
     public const string Mishearing = "Mishearing";
     public const string TermDiscovery = "TermDiscovery";
     public const string TermImport = "TermImport";
+    public const string TitleTranslation = "TitleTranslation";
+    public const string ChapterTitleTranslation = "ChapterTitleTranslation";
     public const string Other = "Other";
 }
 

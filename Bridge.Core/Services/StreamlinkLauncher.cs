@@ -16,6 +16,12 @@ public sealed class StreamlinkLauncher(IProcessRunner runner, ISettingsService s
 
     private const string UnparsableMessage = "無法解析 streamlink 的輸出";
 
+    /// <summary>streamlink 的下載頁（找不到 streamlink 時狀態列「前往下載」按鈕用）。</summary>
+    public const string StreamlinkDownloadUrl = "https://github.com/streamlink/streamlink/releases";
+
+    /// <summary>PotPlayer 的下載頁（找不到 PotPlayer 時狀態列「前往下載」按鈕用）。</summary>
+    public const string PotPlayerDownloadUrl = "https://potplayer.tv/";
+
     private IStartedProcess? _current;
     private string? _currentDescription;
 
@@ -46,14 +52,11 @@ public sealed class StreamlinkLauncher(IProcessRunner runner, ISettingsService s
         }
 
         var config = settings.Current.Streamlink;
-        if (!runner.FileExists(config.StreamlinkPath))
-        {
-            return Fail($"找不到 streamlink：{config.StreamlinkPath}，請到設定頁修改");
-        }
-
+        // streamlink 只在直播路徑用到（錄影直接用 PotPlayer 開網址），存在改到 LaunchViaStreamlinkAsync 檢查
         if (!runner.FileExists(config.PlayerPath))
         {
-            return Fail($"找不到播放器：{config.PlayerPath}，請到設定頁修改");
+            return Fail($"找不到 PotPlayer：{config.PlayerPath}\n請先安裝 PotPlayer（64 位元），或到設定頁修改播放器路徑",
+                PotPlayerDownloadUrl, "前往下載 PotPlayer");
         }
 
         // 開台前準備 PotPlayer：把 port 寫死進翻譯腳本寫入 PotPlayer、改登錄檔設定；
@@ -125,6 +128,13 @@ public sealed class StreamlinkLauncher(IProcessRunner runner, ISettingsService s
         string playerPath, CancellationToken cancellationToken, YouTubePageInfo? page = null,
         Func<StreamMetadata?, CancellationToken, Task>? beforePlayerStart = null)
     {
+        // 真的要跑 streamlink（YouTube 直播中、Twitch、頁面讀不到退回判斷）才檢查存在：錄影路徑不需要 streamlink
+        if (!runner.FileExists(config.StreamlinkPath))
+        {
+            return Fail($"找不到 streamlink：{config.StreamlinkPath}\n看直播需要 streamlink（錄影不需要），請安裝，或到設定頁修改路徑",
+                StreamlinkDownloadUrl, "前往下載 streamlink");
+        }
+
         var query = await runner.RunAsync(config.StreamlinkPath, ["--json", url], QueryTimeout, cancellationToken);
         if (query.TimedOut)
         {
@@ -439,10 +449,10 @@ public sealed class StreamlinkLauncher(IProcessRunner runner, ISettingsService s
         return last;
     }
 
-    private StreamLaunchResult Fail(string message)
+    private StreamLaunchResult Fail(string message, string? helpUrl = null, string? helpLabel = null)
     {
         logger.LogWarning("{Message}", message);
-        return new StreamLaunchResult(false, message, null);
+        return new StreamLaunchResult(false, message, null, HelpUrl: helpUrl, HelpLabel: helpLabel);
     }
 
     /// <summary>被 YouTube 擋下的失敗結果（Message 是「無法開啟：」+ 判斷依據）：沒有跑 streamlink、沒有啟動播放器。</summary>

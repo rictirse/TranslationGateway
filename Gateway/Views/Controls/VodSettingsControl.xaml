@@ -29,6 +29,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Text="每批句數" Style="{StaticResource FieldLabel}" Grid.Row="0"/>
@@ -37,17 +38,56 @@
                     <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
                                Text="越大越省電，但即時翻譯沒命中時要等越久。建議 20（約 3 秒）"/>
 
-                    <TextBlock Text="庫存低於 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                    <TextBlock Text="急件每批句數" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
                     <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldBox}"
-                             Text="{Binding PrefetchLowWaterSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                             Text="{Binding UrgentBatchSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
-                               Text="播放位置之後已翻好的字幕剩不到這麼久，就補翻下一批"/>
+                               Text="PotPlayer 正在等的句子沒翻好時，臨時插隊翻的那一批。越少越快回來，但批次次數變多。建議 3（約 1 秒）"/>
 
-                    <TextBlock Text="逾時 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                    <TextBlock Text="庫存低於 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
                     <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldBox}"
-                             Text="{Binding PrefetchTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                             Text="{Binding PrefetchLowWaterSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="播放位置之後已翻好的字幕剩不到這麼久，就補翻下一批。PotPlayer 會提前請求翻譯，程式會自動把門檻拉高到比它提前的距離多 30 秒（上限 600）。建議 180"/>
+
+                    <TextBlock Text="逾時 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="3"/>
+                    <TextBox Grid.Row="3" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding PrefetchTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="3" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
                                Text="預先翻譯單批的逾時，比即時翻譯寬鬆"/>
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Header="章節名稱">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="110"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,2,0,4"
+                              Content="在 PotPlayer 左上角顯示章節名稱"
+                              IsChecked="{Binding ShowChapterTitles, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="錄影時顯示目前章節（通常是歌名），中文在上、日文在下。章節來自說明欄，沒有時用留言的セトリ"/>
+
+                    <TextBlock Text="字級" Style="{StaticResource FieldLabel}" Grid.Row="1"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding ChapterTitleFontSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="建議 12。數字越大字越大"/>
+
+                    <TextBlock Text="查不到原曲長度時顯示 (秒)" Style="{StaticResource FieldLabel}" Grid.Row="2"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldBox}"
+                             Text="{Binding ChapterTitleFallbackSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0"
+                               Text="歌名在左上角最多顯示多久（LRCLIB 查不到原曲長度時）；不超過下一章開始。建議 300"/>
                 </Grid>
             </GroupBox>
 

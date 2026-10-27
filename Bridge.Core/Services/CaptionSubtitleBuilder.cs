@@ -11,6 +11,12 @@ namespace Translation.Bridge.Core.Services;
 /// <param name="FromSentence">true 表示來自前處理句子（caption_sentences）；false 表示由程式合併原始 cue。</param>
 public sealed record SubtitleLine(long StartMs, long EndMs, string Text, bool FromSentence);
 
+/// <summary>疊加在一般字幕上的 cue（章節名稱等）：內容原樣寫入 SRT、不經 CueText 清理；換行用 \n 表示。</summary>
+/// <param name="StartMs">開始毫秒。</param>
+/// <param name="EndMs">結束毫秒。</param>
+/// <param name="Text">cue 內容（含 {\an7\fs12} 這類標記）。</param>
+public sealed record SubtitleOverlay(long StartMs, long EndMs, string Text);
+
 /// <summary>組「一個 cue 一整句」的字幕行並輸出成 WebVTT：前處理過的時段直接用前處理句子，
 /// 沒涵蓋的時段由程式把原始滾動 cue 合併成整句（原始 cue 文字彼此不重疊，接起來就是完整文字）。</summary>
 public static class CaptionSubtitleBuilder
@@ -106,20 +112,77 @@ public static class CaptionSubtitleBuilder
         return builder.ToString();
     }
 
-    /// <summary>把字幕行輸出成 SRT 文字（編號從 1 開始、cue 之間空一行、換行用 \r\n、時間用逗號）。</summary>
-    public static string ToSrt(IReadOnlyList<SubtitleLine> lines)
+    /// <summary>把章節清單組成疊加 cue：每章一條，結束時間是 min(下一章的開始（最後一章用 <paramref name="videoEndMs"/>）,
+    /// 開始＋原曲長度＋5 秒收尾)；查不到原曲長度（<see cref="ChapterOverlayItem.DurationMs"/> 是 null）的章節顯示
+    /// <paramref name="fallbackDurationMs"/>（≤ 0 視為 5 分鐘，不加收尾秒數）。
+    /// 內容以 {\an7\fs&lt;fontSize&gt;} 開頭（PotPlayer 會固定顯示在左上角）只放日文原文——
+    /// PotPlayer 把這條 cue 送來翻譯時，TranslationManager 會直接回傳 ChapterOverlayState 已翻好的中文，
+    /// 由 PotPlayer 照平常的方式顯示「中文在上、日文在下」。</summary>
+    public static IReadOnlyList<SubtitleOverlay> BuildChapterOverlays(
+        IReadOnlyList<ChapterOverlayItem> items, long videoEndMs, int fontSize, long fallbackDurationMs)
     {
-        var builder = new StringBuilder();
-        for (var i = 0; i < lines.Count; i++)
+        if (fontSize <= 0)
         {
-            if (i > 0)
+            fontSize = 12;
+        }
+
+        if (fallbackDurationMs <= 0)
+        {
+            fallbackDurationMs = 300000;
+        }
+
+        var overlays = new List<SubtitleOverlay>(items.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            // 唱完後的聊天不掛歌名：查到原曲長度就多留 5 秒收尾，查不到用 fallback
+            var displayMs = items[i].DurationMs is { } durationMs ? durationMs + 5000 : fallbackDurationMs;
+            var endMs = i + 1 < items.Count ? items[i + 1].StartMs : videoEndMs;
+            endMs = Math.Min(endMs, items[i].StartMs + displayMs);
+            if (endMs <= items[i].StartMs)
+            {
+                endMs = items[i].StartMs + 60000;
+            }
+
+            overlays.Add(new SubtitleOverlay(items[i].StartMs, endMs, $"{{\\an7\\fs{fontSize}}}{items[i].Title}"));
+        }
+
+        return overlays;
+    }
+
+    /// <summary>把字幕行輸出成 SRT 文字（編號從 1 開始、cue 之間空一行、換行用 \r\n、時間用逗號）。</summary>
+    public static string ToSrt(IReadOnlyList<SubtitleLine> lines) => ToSrt(lines, []);
+
+    /// <summary>把字幕行與疊加 cue 輸出成 SRT 文字：依開始時間合併排序（同時間一般字幕在前）、重新編號；
+    /// 一般字幕照舊經 <see cref="CueText"/>，疊加 cue 原樣輸出（換行的 \n 轉成 \r\n）。</summary>
+    public static string ToSrt(IReadOnlyList<SubtitleLine> lines, IReadOnlyList<SubtitleOverlay> overlays)
+    {
+        var entries = new List<(long StartMs, bool IsOverlay, SubtitleLine? Line, SubtitleOverlay? Overlay)>(lines.Count + overlays.Count);
+        foreach (var line in lines)
+        {
+            entries.Add((line.StartMs, IsOverlay: false, line, null));
+        }
+
+        foreach (var overlay in overlays)
+        {
+            entries.Add((overlay.StartMs, IsOverlay: true, null, overlay));
+        }
+
+        var builder = new StringBuilder();
+        var index = 0;
+        foreach (var entry in entries.OrderBy(e => e.StartMs).ThenBy(e => e.IsOverlay))
+        {
+            index++;
+            if (index > 1)
             {
                 builder.Append("\r\n");
             }
 
-            builder.Append(i + 1).Append("\r\n");
-            builder.Append(FormatSrtTimestamp(lines[i].StartMs)).Append(" --> ").Append(FormatSrtTimestamp(lines[i].EndMs)).Append("\r\n");
-            builder.Append(CueText(lines[i].Text));
+            var (startMs, endMs, text) = entry.IsOverlay
+                ? (entry.Overlay!.StartMs, entry.Overlay.EndMs, entry.Overlay.Text.Replace("\r\n", "\n").Replace("\n", "\r\n"))
+                : (entry.Line!.StartMs, entry.Line.EndMs, CueText(entry.Line.Text));
+            builder.Append(index).Append("\r\n");
+            builder.Append(FormatSrtTimestamp(startMs)).Append(" --> ").Append(FormatSrtTimestamp(endMs)).Append("\r\n");
+            builder.Append(text);
             builder.Append("\r\n");
         }
 

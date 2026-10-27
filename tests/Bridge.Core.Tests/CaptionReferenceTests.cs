@@ -25,9 +25,8 @@ public class CaptionReferenceTests
 
         var section = sut.BuildUserPromptSection("これで部屋着じゃなかったら");
 
-        // 只對到範圍內［30000, 48000］的 cue，範圍外即使完全一樣也不採用
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", section);
-        Assert.Contains("ぴんくの部屋着じゃなかったら", section);
+        // 只對到範圍內［30000, 48000］的 cue，範圍外即使完全一樣也不採用（差一小段 → 一行聽錯提示）
+        Assert.Equal("# 聽錯提示：「これで」應為「ぴんくの」", section);
         Assert.DoesNotContain("これで部屋着", section);
     }
 
@@ -64,9 +63,8 @@ public class CaptionReferenceTests
 
         var section = sut.BuildUserPromptSection("これで部屋着じゃなかったら");
 
-        // 8 字以上而且分數 ≥ 0.6：在全片找得到（0.8 未達 0.9，仍放參考）
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", section);
-        Assert.Contains("ぴんくの部屋着じゃなかったら", section);
+        // 8 字以上而且分數 ≥ 0.6：在全片找得到（0.8 未達 0.9，仍放參考；差一小段 → 一行聽錯提示）
+        Assert.Equal("# 聽錯提示：「これで」應為「ぴんくの」", section);
     }
 
     [Fact]
@@ -79,8 +77,8 @@ public class CaptionReferenceTests
 
         var section = sut.BuildUserPromptSection("私設計者の風上に設けない");
 
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", section);
-        Assert.Contains("設計者の風にも受けない", section);
+        // 裁切只留對到本句的那段（差一小段 → 一行聽錯提示），前後句的內容不會出現
+        Assert.Equal("# 聽錯提示：「私設計者の風上に設」應為「設計者の風にも受」", section);
         Assert.DoesNotContain("もう橋", section);
         Assert.DoesNotContain("そんな", section);
     }
@@ -100,7 +98,8 @@ public class CaptionReferenceTests
         clock.PositionMs = null;
         var next = sut.BuildUserPromptSection("今日はとてもいい天気です");
 
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", next);
+        // 插入造成的差異（To 為空）寫不成一行提示：送整段參考
+        Assert.StartsWith("# YouTube 字幕（修正聽錯用，勿翻譯）", next);
         Assert.Contains("今日はいい天気です", next);
     }
 
@@ -118,16 +117,44 @@ public class CaptionReferenceTests
         var sut = new CaptionReference(captions, clock);
 
         var first = sut.BuildUserPromptSection("これで部屋着じゃなかったら");
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", first);
+        Assert.Equal("# 聽錯提示：「これで」應為「ぴんくの」", first);
 
         // 播放器沒回應位置：改在上次對到位置［−30000, +60000］內找下一句
         clock.PositionMs = null;
         var second = sut.BuildUserPromptSection("今日はとてもいい天気です");
 
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", second);
+        Assert.StartsWith("# YouTube 字幕（修正聽錯用，勿翻譯）", second);
         // 對到範圍內的 cue（60 秒），不是範圍外完全一樣的（900 秒）
         Assert.Contains("今日はいい天気です", second);
         Assert.DoesNotContain("とても", second);
+    }
+
+    [Fact]
+    public void BuildUserPromptSection_DiffersByOneKatakanaWord_ReturnsSingleLineHint()
+    {
+        var captions = new CaptionTrackState();
+        captions.Set("vod", [Cue(50_000, "今日はヴァンダルの話")]);
+        var sut = new CaptionReference(captions, new FakePlaybackClock { PositionMs = 55_000 });
+
+        var section = sut.BuildUserPromptSection("今日はバンダルの話");
+
+        // 只差一個片假名詞：一行聽錯提示，內容正確，而且沒有換行
+        Assert.Equal("# 聽錯提示：「バンダル」應為「ヴァンダル」", section);
+        Assert.DoesNotContain('\n', section);
+    }
+
+    [Fact]
+    public void BuildUserPromptSection_ChangedSegmentTooLong_ReturnsFullSection()
+    {
+        var captions = new CaptionTrackState();
+        captions.Set("vod", [Cue(50_000, "今日は雨が降りそうな空模様なので公園に散歩はやめました")]);
+        var sut = new CaptionReference(captions, new FakePlaybackClock { PositionMs = 55_000 });
+
+        var section = sut.BuildUserPromptSection("今日はとても良い天気なので公園に散歩に行きました");
+
+        // 變動片段超過 12 字：寫不成一行提示，送整段參考
+        Assert.StartsWith("# YouTube 字幕（修正聽錯用，勿翻譯）\n", section);
+        Assert.Contains("今日は雨が降りそうな空模様なので公園に散歩はやめました", section);
     }
 
     [Fact]
@@ -147,7 +174,7 @@ public class CaptionReferenceTests
 
         var section = sut.BuildUserPromptSection("これで部屋着じゃなかったら");
 
-        Assert.StartsWith("# 參考：同一時段的 YouTube 自動字幕", section);
+        Assert.Equal("# 聽錯提示：「これで」應為「ぴんくの」", section);
         Assert.DoesNotContain('\r', section);
     }
 

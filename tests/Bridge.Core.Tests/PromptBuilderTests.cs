@@ -155,6 +155,16 @@ public class PromptBuilderTests
     }
 
     [Fact]
+    public void BatchSystemTemplate_ForbidsExplanations()
+    {
+        // T-2106：錄影批次加第 9 條規則，從源頭禁止模型加括號說明；直播用的預設模板不加這條
+        Assert.EndsWith(
+            "9. 只輸出譯文，不要加任何括號說明、註解或「辨識不清」之類的備註；原文看不懂時照字面盡量翻，不要解釋。",
+            PromptBuilder.BatchSystemTemplate);
+        Assert.DoesNotContain("不要加任何括號說明", PromptBuilder.DefaultSystemTemplate);
+    }
+
+    [Fact]
     public void BuildSingleTurnUserPrompt_MatchesTranslationManagerFormat()
     {
         var request = new PotplayerRequest { Current = "c", Context = ["a", "b"] };

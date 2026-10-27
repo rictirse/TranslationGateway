@@ -156,9 +156,22 @@ internal sealed class TempDatabase : IDisposable
         Service = new SqliteTranslationStore(NullLogger<SqliteTranslationStore>.Instance, _path);
     }
 
+    /// <summary>逾時測試的模型請求會在背景跑完（T-2095），測試結束時可能還在寫快取：
+    /// Windows 不能刪除使用中的檔案，因此重試約 2 秒，仍刪不掉就留給暫存資料夾（不讓測試失敗）。</summary>
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(_path)) File.Delete(_path);
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try
+            {
+                if (File.Exists(_path)) File.Delete(_path);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(100);
+            }
+        }
     }
 }

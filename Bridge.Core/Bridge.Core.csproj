@@ -11,6 +11,8 @@
 		<EmbeddedResource Include="Sql\*.sql" />
 		<!-- PotPlayer 翻譯腳本模板：開台時把 port 寫死後寫入 PotPlayer（LogicalName 固定，TranslateScriptBuilder 才讀得到） -->
 		<EmbeddedResource Include="..\tools\potplayer\SubtitleTranslate.as" LogicalName="Translation.Bridge.Core.SubtitleTranslate.as" />
+		<!-- PotPlayer 章節掛勾模板：開片前接進 MediaPlayParse - YouTube.as（LogicalName 固定，ChaptersHookBuilder 才讀得到） -->
+		<EmbeddedResource Include="..\tools\potplayer\ChaptersHook.as" LogicalName="Translation.Bridge.Core.ChaptersHook.as" />
 	</ItemGroup>
 
 	<ItemGroup>

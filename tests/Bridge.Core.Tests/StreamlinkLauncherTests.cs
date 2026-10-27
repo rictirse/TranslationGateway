@@ -207,7 +207,7 @@ public class StreamlinkLauncherTests
     }
 
     [Fact]
-    public async Task LaunchAsync_StreamlinkMissing_FailsWithPathInMessage()
+    public async Task Twitch_WithoutStreamlink_FailsWithHelpUrl()
     {
         var config = new StreamlinkSettings { StreamlinkPath = "/fake/streamlink.exe", PlayerPath = "/fake/player.exe" };
         var (launcher, runner, _) = Create(config);
@@ -215,13 +215,74 @@ public class StreamlinkLauncherTests
 
         var result = await launcher.LaunchAsync("https://www.twitch.tv/someone", cancellationToken: TestContext.Current.CancellationToken);
 
+        // 直播路徑要跑 streamlink 才檢查存在：失敗訊息附下載頁
         Assert.False(result.Success);
         Assert.Contains(config.StreamlinkPath, result.Message);
+        Assert.Contains("錄影不需要", result.Message);
+        Assert.Equal(StreamlinkLauncher.StreamlinkDownloadUrl, result.HelpUrl);
+        Assert.Equal("前往下載 streamlink", result.HelpLabel);
+        Assert.Empty(runner.Runs);
+        Assert.Empty(runner.Starts);
+    }
+
+    [Fact]
+    public async Task YouTubeLive_WithoutStreamlink_FailsWithHelpUrl()
+    {
+        var config = new StreamlinkSettings { StreamlinkPath = "/fake/streamlink.exe", PlayerPath = "/fake/player.exe" };
+        var pageInfo = new FakePageInfoProvider();
+        pageInfo.Results.Enqueue(Page(isLiveNow: true, isLiveContent: true));
+        var (launcher, runner, _) = Create(config, pageInfo);
+        runner.ExistingFiles.Remove(config.StreamlinkPath);
+
+        var result = await launcher.LaunchAsync("https://www.youtube.com/watch?v=abc", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal(StreamlinkLauncher.StreamlinkDownloadUrl, result.HelpUrl);
+        Assert.Equal("前往下載 streamlink", result.HelpLabel);
+        Assert.Empty(runner.Runs);
+        Assert.Empty(runner.Starts);
+    }
+
+    [Fact]
+    public async Task YouTubeVod_WithoutStreamlink_LaunchesPlayer()
+    {
+        var config = new StreamlinkSettings { StreamlinkPath = "/fake/streamlink.exe", PlayerPath = "/fake/player.exe" };
+        var pageInfo = new FakePageInfoProvider();
+        pageInfo.Results.Enqueue(Page()); // 錄影
+        var (launcher, runner, _) = Create(config, pageInfo);
+        runner.ExistingFiles.Remove(config.StreamlinkPath);
+        var url = "https://www.youtube.com/watch?v=abc";
+
+        var result = await launcher.LaunchAsync(url, cancellationToken: TestContext.Current.CancellationToken);
+
+        // 錄影不經 streamlink：沒裝也能直接用 PotPlayer 開網址
+        Assert.True(result.Success);
+        Assert.Null(result.HelpUrl);
+        Assert.Equal(config.PlayerPath, Assert.Single(runner.Starts).FileName);
+        Assert.Equal([url], Assert.Single(runner.Starts).Arguments);
         Assert.Empty(runner.Runs);
     }
 
     [Fact]
-    public async Task LaunchAsync_PlayerMissing_FailsWithPathInMessage()
+    public async Task PageUnreadable_WithoutStreamlink_FailsWithHelpUrl()
+    {
+        var config = new StreamlinkSettings { StreamlinkPath = "/fake/streamlink.exe", PlayerPath = "/fake/player.exe" };
+        var pageInfo = new FakePageInfoProvider();
+        pageInfo.Results.Enqueue(null); // 頁面讀不到 → 退回 streamlink 判斷
+        var (launcher, runner, _) = Create(config, pageInfo);
+        runner.ExistingFiles.Remove(config.StreamlinkPath);
+
+        var result = await launcher.LaunchAsync("https://www.youtube.com/watch?v=abc", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal(StreamlinkLauncher.StreamlinkDownloadUrl, result.HelpUrl);
+        Assert.Equal("前往下載 streamlink", result.HelpLabel);
+        Assert.Empty(runner.Runs);
+        Assert.Empty(runner.Starts);
+    }
+
+    [Fact]
+    public async Task PlayerMissing_FailsWithPotPlayerHelpUrl()
     {
         var config = new StreamlinkSettings { StreamlinkPath = "/fake/streamlink.exe", PlayerPath = "/fake/player.exe" };
         var (launcher, runner, _) = Create(config);
@@ -231,7 +292,11 @@ public class StreamlinkLauncherTests
 
         Assert.False(result.Success);
         Assert.Contains(config.PlayerPath, result.Message);
+        Assert.Contains("請先安裝 PotPlayer", result.Message);
+        Assert.Equal(StreamlinkLauncher.PotPlayerDownloadUrl, result.HelpUrl);
+        Assert.Equal("前往下載 PotPlayer", result.HelpLabel);
         Assert.Empty(runner.Runs);
+        Assert.Empty(runner.Starts);
     }
 
     [Fact]

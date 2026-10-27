@@ -6,10 +6,18 @@ namespace Translation.Bridge.Core.Services;
 /// <summary>
 /// 翻譯時的 YouTube 字幕參考（DI singleton）：以播放位置在時間範圍內對照最像的 YouTube 字幕，
 /// 夠像時組成 user prompt 的參考段落，讓模型在 Whisper 明顯聽錯時採用 YouTube 的寫法。
+/// 只差一小段（變動片段 ≤ 12 字）時送一行聽錯提示（<see cref="HintHeader"/>），
+/// 差很多時才送整段參考（<see cref="FullHeader"/>），減少每句的 prompt token。
 /// 沒有播放位置時沿用上次對到的位置附近找；從來沒對到過則提高門檻在全片找。
 /// </summary>
 public sealed class CaptionReference
 {
+    /// <summary>只差一小段時的聽錯提示開頭。</summary>
+    public const string HintHeader = "# 聽錯提示：";
+
+    /// <summary>差很多時的整段參考標題。</summary>
+    public const string FullHeader = "# YouTube 字幕（修正聽錯用，勿翻譯）";
+
     /// <summary>有播放位置時的搜尋範圍：往回 15 秒。</summary>
     private const long PositionBeforeMs = 15_000;
 
@@ -49,7 +57,9 @@ public sealed class CaptionReference
         captions.Changed += Reset;
     }
 
-    /// <summary>組本句的 YouTube 字幕參考段落；沒載入字幕或對不到時回傳空字串。</summary>
+    /// <summary>組本句的 YouTube 字幕參考段落；沒載入字幕或對不到時回傳空字串。
+    /// 裁切後的字幕與本句只差一小段（變動片段兩邊都非空且 ≤ 12 字）時，回傳一行聽錯提示
+    /// （「聽錯的」應為「正確的」）；其他情況回傳標題加整段字幕。</summary>
     public string BuildUserPromptSection(string current)
     {
         if (!_captions.IsLoaded)
@@ -113,8 +123,18 @@ public sealed class CaptionReference
             return string.Empty;
         }
 
+        // 只差一小段（聽錯一個詞）時送一行提示，省掉整段字幕的 token
+        var seg = TextDiff.ChangedSegment(current, trimmed);
+        if (seg is { } changed && changed.From.Length > 0 && changed.To.Length > 0
+            && changed.From.Length <= 12 && changed.To.Length <= 12)
+        {
+            _logger?.LogInformation("YouTube 字幕參考：{Score:0.00} 提示「{From}」→「{To}」",
+                score, changed.From, changed.To);
+            return $"{HintHeader}「{changed.From}」應為「{changed.To}」";
+        }
+
         _logger?.LogInformation("YouTube 字幕參考：{Score:0.00}「{Text}」", score, trimmed);
-        return $"# 參考：同一時段的 YouTube 自動字幕（只用來修正本句聽錯的詞；不要翻譯、不要輸出這段）\n{trimmed}";
+        return $"{FullHeader}\n{trimmed}";
     }
 
     /// <summary>清掉上次對到的位置（換影片或重配字幕時由 CaptionTrackState.Changed 呼叫）。</summary>

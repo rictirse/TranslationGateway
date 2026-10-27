@@ -34,6 +34,9 @@ public partial class TranslationJob : ObservableObject
     /// <summary>此筆取代的前一筆 Job 的 Id；不是修正版時為 null。</summary>
     public string? RevisionOf { get; set; }
 
+    /// <summary>錄影時這一列是 PotPlayer 目前播放到的那一句（字幕監看高亮用，不寫資料庫）。</summary>
+    [ObservableProperty] private bool _isPlaying;
+
     /// <summary>命中翻譯快取時，該筆 TranslationCache 的 Id；其他情況為 null。</summary>
     public long? CacheId { get; set; }
 

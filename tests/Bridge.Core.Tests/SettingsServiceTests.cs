@@ -79,10 +79,45 @@ public class SettingsServiceTests
 
             Assert.NotNull(reloaded.Current.Vod);
             Assert.Equal(20, reloaded.Current.Vod.PrefetchBatchSize);
-            Assert.Equal(60, reloaded.Current.Vod.PrefetchLowWaterSeconds);
+            Assert.Equal(3, reloaded.Current.Vod.UrgentBatchSize);
+            Assert.Equal(180, reloaded.Current.Vod.PrefetchLowWaterSeconds);
             Assert.Equal(30, reloaded.Current.Vod.PrefetchTimeoutSeconds);
             Assert.Equal(180, reloaded.Current.Vod.MiningWaitSeconds);
             Assert.Equal(80, reloaded.Current.Vod.PreemptThresholdPercent);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>舊版 settings.json 的 Vod 區塊沒有 UrgentBatchSize 欄位時，載入後讀成預設 3（不得變 0）。</summary>
+    [Fact]
+    public async Task LoadAsync_OldVodWithoutUrgentBatchSize_ReadsDefaultThree()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(path, """
+                {
+                  "Translation": {
+                    "ApiHost": "http://192.168.81.50:8080/v1",
+                    "Model": "qwen3.8-flash-next"
+                  },
+                  "Vod": {
+                    "PrefetchBatchSize": 20,
+                    "PrefetchLowWaterSeconds": 180,
+                    "PrefetchTimeoutSeconds": 30,
+                    "MiningWaitSeconds": 180,
+                    "PreemptThresholdPercent": 80
+                  }
+                }
+                """, TestContext.Current.CancellationToken);
+
+            var reloaded = new SettingsService(NullLogger<SettingsService>.Instance, path);
+            await reloaded.LoadAsync();
+
+            Assert.Equal(3, reloaded.Current.Vod.UrgentBatchSize);
         }
         finally
         {

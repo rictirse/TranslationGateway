@@ -95,7 +95,12 @@ public class OpenAiClient : IOpenAiClient
 
             ChatClient chatClient = GetOrCreateClient(endpoint, apiKey).GetChatClient(s.Translation.Model);
 
-            List<ChatMessage> messages = BuildMessages(systemText, history, userText: null);
+            // 混合架構模型只能從伺服器在「回答開始」留下的檢查點接續，無法退回到較短的共同開頭：
+            // 有歷史時重送到最後一輪的 user 為止（不含它的 assistant），檢查點就落在下一個正式請求的開頭裡；
+            // 若送完整歷史，檢查點會在歷史結尾的 assistant 開頭，跟下一句「歷史 + 新 user」對不上
+            List<ChatMessage> messages = history.Count > 0
+                ? BuildMessages(systemText, history.Take(history.Count - 1).ToList(), userText: history[^1].User)
+                : BuildMessages(systemText, history, userText: null);
             ChatCompletionOptions options = BuildOptions(s.Translation, 1);
 
             await chatClient.CompleteChatAsync(messages, options, cancellationToken);

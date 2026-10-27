@@ -25,12 +25,56 @@ public class TranslationManager
     private readonly MishearingFixState? _mishearingFixes;
     private readonly CaptionReference? _captionReference;
     private readonly PrefetchInFlight? _prefetchInFlight;
+    private readonly ChapterOverlayState? _chapterOverlay;
     private readonly ILogger<TranslationManager>? _logger;
     private readonly LlmCallRecorder? _recorder;
 
     /// <summary>最近翻譯過的字幕（舊到新），供重複字幕判斷使用。</summary>
     private readonly object _recentLock = new();
     private readonly List<RecentItem> _recent = [];
+
+    /// <summary>背景完成上限：逾時後不再取消模型請求，讓它在背景繼續跑完（伺服器會留下對話檢查點）。</summary>
+    private static readonly TimeSpan BackgroundCompletionLimit = TimeSpan.FromSeconds(30);
+
+    /// <summary>背景完成請求（逾時後不取消的模型請求）與補記快取／歷史所需的資訊。</summary>
+    private sealed class BackgroundRequest
+    {
+        /// <summary>進行中的模型請求（以背景 token 送出，尚未完成）。</summary>
+        public Task<ChatResult> CallTask { get; set; } = null!;
+        /// <summary>背景 token 的來源；請求結束時處置（處置不會取消 token）。</summary>
+        public CancellationTokenSource CallCts { get; set; } = null!;
+        /// <summary>送出那次 TranslationJob 的 Id（llm_calls 已以此 Id 記錄，僅供追蹤）。</summary>
+        public string JobId { get; set; } = string.Empty;
+        /// <summary>原文（原文修正規則套用後的 Current，即快取索引）。</summary>
+        public string Current { get; set; } = string.Empty;
+        /// <summary>送出時的 system prompt。</summary>
+        public string SystemPrompt { get; set; } = string.Empty;
+        /// <summary>送出時的重複字幕判斷前一句（成功時 Replace 的對象）。</summary>
+        public RecentItem? Previous { get; set; }
+        /// <summary>送出時間（Stopwatch timestamp，供背景完成 log 計算實際耗時）。</summary>
+        public long StartedAtTimestamp { get; set; }
+    }
+
+    /// <summary>背景完成請求（同時最多一筆）；null 表示目前沒有。</summary>
+    private readonly object _backgroundLock = new();
+    private BackgroundRequest? _background;
+
+    /// <summary>背景請求進行中收到的快取命中輪次，待背景結束後依序補進對話歷史。</summary>
+    private readonly List<ChatTurn> _pendingHistoryTurns = [];
+
+    /// <summary>最近一次真正送出即時模型請求的 UTC 時間（ticks；0＝還沒送過）。</summary>
+    private long _lastLiveModelCallAtTicks;
+
+    /// <summary>最近一次真正送出即時模型請求的時間（UTC）；還沒送過時為 null。
+    /// 預先翻譯用它判斷即時翻譯是否正在運作，決定批次結束後要不要預熱即時對話。</summary>
+    public DateTimeOffset? LastLiveModelCallAt
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastLiveModelCallAtTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
 
     public TranslationManager(
         IOpenAiClient llmClient,
@@ -44,7 +88,8 @@ public class TranslationManager
         CaptionReference? captionReference = null,
         ILogger<TranslationManager>? logger = null,
         PrefetchInFlight? prefetchInFlight = null,
-        LlmCallRecorder? recorder = null)
+        LlmCallRecorder? recorder = null,
+        ChapterOverlayState? chapterOverlay = null)
     {
         _llmClient = llmClient;
         _db = db;
@@ -58,6 +103,7 @@ public class TranslationManager
         _logger = logger;
         _prefetchInFlight = prefetchInFlight;
         _recorder = recorder;
+        _chapterOverlay = chapterOverlay;
         _session = new ConversationSession(_timeProvider);
     }
 
@@ -225,6 +271,18 @@ public class TranslationManager
     {
         if (request is null) return string.Empty;
 
+        // 章節名稱疊加的 cue：PotPlayer 把左上角的章節標題送來翻譯時，直接回傳 ChapterOverlayState 已翻好的中文
+        // （不送模型、不寫快取、不進對話歷史、不寫字幕紀錄），PotPlayer 會照平常的方式顯示「中文在上、日文在下」
+        if (_chapterOverlay is not null && !string.IsNullOrWhiteSpace(request.Current))
+        {
+            var chapterTranslation = _chapterOverlay.FindTranslation(request.Current);
+            if (chapterTranslation is not null)
+            {
+                _logger?.LogDebug("即時翻譯：{Current} 是章節名稱，直接回傳疊加譯文", request.Current);
+                return ReplacementRules.Apply(chapterTranslation, _settings.Current.ReplacementRules);
+            }
+        }
+
         // 連線測試請求：直接回傳原文，不送模型、不讀寫快取、不進歷史、不發 Job
         if (request.Probe || string.Equals(request.Current, PromptBuilder.ProbeText, StringComparison.Ordinal))
         {
@@ -291,11 +349,14 @@ public class TranslationManager
         string modelUserText;
         if (conversation)
         {
-            // 多輪模式：有 YouTube 字幕參考時，本句前面加標題，明確標出只翻譯這段（避免模型照參考段落翻出前後句）
-            var currentText = captionSection.Length > 0
+            // 多輪模式：整段參考（CaptionReference.FullHeader 開頭）時本句前面加標題，
+            // 明確標出只翻譯這段（避免模型照參考段落翻出前後句）；短提示只有一行，不會被誤翻成前後句，不加
+            var currentText = captionSection.StartsWith(CaptionReference.FullHeader, StringComparison.Ordinal)
                 ? $"# 本句（只翻譯這段）\n{request.Current}"
                 : request.Current;
             history = _session.GetHistory(systemPrompt);
+            // system prompt 改變（對話被重置）：背景期間暫存的歷史輪次一併清空
+            ClearPendingHistoryIfSystemChanged(systemPrompt);
             userPrompt = BuildConversationUserPrompt(history, currentText);
             modelUserText = currentText;
         }
@@ -342,14 +403,46 @@ public class TranslationManager
         }
         else
         {
-            // 這句正在預先翻譯的批次裡：等那批完成（最多 TimeoutMs）再查快取，不另外送模型
-            if (_prefetchInFlight?.WaitTaskFor(request.Current) is { } pending)
+            // 這句正在預先翻譯的批次裡：等那批完成（最多 TimeoutMs）再查快取，不另外送模型；
+            // 但快取已有譯文時不等（上次看過的句子，預翻只是在重翻），直接往下走既有的查快取流程
+            if (_prefetchInFlight?.WaitTaskFor(request.Current) is { } pending &&
+                _db.GetCache(request.Current) is null)
             {
                 var swWait = Stopwatch.StartNew();
                 var waitLimitMs = s.Translation.TimeoutMs > 0 ? s.Translation.TimeoutMs : 5000;
                 await Task.WhenAny(pending, Task.Delay(TimeSpan.FromMilliseconds(waitLimitMs), _timeProvider, cancellationToken));
                 swWait.Stop();
                 _logger?.LogDebug("即時翻譯：這句正在預先翻譯，等批次完成（{Elapsed} ms）", swWait.ElapsedMilliseconds);
+                // 呼叫端取消時，照原本的行為往外拋 OperationCanceledException
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            // 記錄推送字幕行被請求的時間（不論快取是否命中）：預翻用它換算 PotPlayer 的提前請求距離
+            if (_prefetchInFlight is { } noted &&
+                noted.IsActive &&
+                noted.IsKnown(request.Current))
+            {
+                noted.NoteRequested(request.Current);
+            }
+
+            // 讓路：預先翻譯運作中、這句是推送字幕行（IsKnown）、快取沒命中而且不在正在執行的批次裡時，
+            // 要求預翻「從這句開始馬上翻一批」並等結果；等完只查快取，沒命中也不另外送即時模型
+            // （預翻與即時翻譯共用單槽模型伺服器，輪流送會互相擠掉前綴快取，形成連鎖逾時）
+            var yieldedToPrefetch = false;
+            if (_prefetchInFlight is { } prefetch &&
+                prefetch.IsActive &&
+                prefetch.IsKnown(request.Current) &&
+                _db.GetCache(request.Current) is null &&
+                prefetch.WaitTaskFor(request.Current) is null)
+            {
+                yieldedToPrefetch = true;
+                var swYield = Stopwatch.StartNew();
+                var urgent = prefetch.RequestUrgent(request.Current);
+                var yieldLimitMs = s.Translation.TimeoutMs > 0 ? s.Translation.TimeoutMs : 5000;
+                await Task.WhenAny(urgent, Task.Delay(TimeSpan.FromMilliseconds(yieldLimitMs), _timeProvider, cancellationToken));
+                swYield.Stop();
+                _logger?.LogDebug("即時翻譯：交給預先翻譯（{Elapsed} ms，{Result}）",
+                    swYield.ElapsedMilliseconds, _db.GetCache(request.Current) is not null ? "命中" : "未命中");
                 // 呼叫端取消時，照原本的行為往外拋 OperationCanceledException
                 cancellationToken.ThrowIfCancellationRequested();
             }
@@ -371,7 +464,15 @@ public class TranslationManager
                     // 崩壞的手動項目不記錄，避免污染多輪對話
                     if (conversation && !collapsedCache)
                     {
-                        if (previous is null || !_session.Replace(previous.HistoryUser, request.Current, cached))
+                        if (_background is not null)
+                        {
+                            // 背景請求進行中：先進暫存清單，背景結束後依序補進（歷史順序：背景那句在前）
+                            lock (_backgroundLock)
+                            {
+                                _pendingHistoryTurns.Add(new ChatTurn(request.Current, cached));
+                            }
+                        }
+                        else if (previous is null || !_session.Replace(previous.HistoryUser, request.Current, cached))
                         {
                             _session.Append(request.Current, cached);
                         }
@@ -438,6 +539,52 @@ public class TranslationManager
                 return output;
             }
 
+            // 讓路後仍然沒命中：不另外送即時模型，回傳原文並發出與逾時相同的 TIMEOUT Job
+            // （Id 沿用本句的 job）；不寫快取、不進歷史，也不記 llm_calls（沒有送模型）
+            if (yieldedToPrefetch)
+            {
+                swTotal.Stop();
+                WeakReferenceMessenger.Default.Send(new TranslationJob
+                {
+                    Id = job.Id,
+                    Current = request.Current,
+                    RawSource = rawSource,
+                    CacheKey = request.Current,
+                    Context = string.Join("\n", request.Context),
+                    UserPrompt = userPrompt,
+                    SystemPrompt = "TIMEOUT",
+                    TranslatedText = request.Current,
+                    ModelLatency = 0,
+                    TotalLatency = swTotal.ElapsedMilliseconds,
+                    Source = TranslationSource.Timeout
+                });
+                return request.Current;
+            }
+
+            // 背景請求進行中：伺服器一次只跑一個請求，這句只會排在背景請求後面一起逾時，
+            // 而且會打亂對話歷史的順序，因此不另外送模型，回傳原文並發出與逾時相同的 TIMEOUT Job；
+            // 不寫快取、不進歷史，也不記 llm_calls（沒有送模型）
+            if (_background is not null)
+            {
+                swTotal.Stop();
+                _logger?.LogDebug("即時翻譯：背景請求進行中，略過模型");
+                WeakReferenceMessenger.Default.Send(new TranslationJob
+                {
+                    Id = job.Id,
+                    Current = request.Current,
+                    RawSource = rawSource,
+                    CacheKey = request.Current,
+                    Context = string.Join("\n", request.Context),
+                    UserPrompt = userPrompt,
+                    SystemPrompt = "TIMEOUT",
+                    TranslatedText = request.Current,
+                    ModelLatency = 0,
+                    TotalLatency = swTotal.ElapsedMilliseconds,
+                    Source = TranslationSource.Timeout
+                });
+                return request.Current;
+            }
+
             var swModel = Stopwatch.StartNew();
 
             // 依輸入長度限制模型輸出 token，避免模型囉嗦或重複拖長回應時間
@@ -447,6 +594,8 @@ public class TranslationManager
             // 每一次實際送出模型請求都記一筆 llm_calls（崩壞重試會送兩次，就記兩筆）；外部取消不記
             async Task<ChatResult> SendCurrentAsync(CancellationToken token)
             {
+                // 真正送出即時模型請求的時間：預翻用它判斷即時翻譯是否正在運作
+                Interlocked.Exchange(ref _lastLiveModelCallAtTicks, _timeProvider.GetUtcNow().UtcTicks);
                 var swModelCall = Stopwatch.StartNew();
                 try
                 {
@@ -524,21 +673,43 @@ public class TranslationManager
             ChatResult chatResult;
             if (s.Translation.TimeoutMs > 0)
             {
-                // 逾時保護：SDK 重試時可能丟出包裝過的例外（如 AggregateException），
-                // 因此只要「連動 token 已觸發且外部未取消」一律視為逾時：回原文、不寫快取、發 TIMEOUT Job 通知 UI
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                linkedCts.CancelAfter(s.Translation.TimeoutMs);
-                try
+                // 等待逾時（不取消請求）：模型請求改用背景 token（與呼叫端取消無關、上限 30 秒），
+                // 呼叫端只等 TimeoutMs——沒等到就回原文、發 TIMEOUT Job，請求交給背景完成處理繼續跑完。
+                // 伺服器只在回答開始時留下對話檢查點、被取消的請求不會留下：取消會打斷前綴快取、形成連鎖逾時
+                var backgroundCts = new CancellationTokenSource();
+                backgroundCts.CancelAfter(BackgroundCompletionLimit);
+                var startedAt = Stopwatch.GetTimestamp();
+                var callTask = CallModelAsync(backgroundCts.Token);
+                var completed = await Task.WhenAny(
+                    callTask,
+                    Task.Delay(TimeSpan.FromMilliseconds(s.Translation.TimeoutMs), _timeProvider, cancellationToken));
+                if (completed == callTask)
                 {
-                    chatResult = await CallModelAsync(linkedCts.Token);
+                    // TimeoutMs 內完成：與成功路徑完全相同（callTask 的例外照現在的錯誤處理往外拋）
+                    try
+                    {
+                        chatResult = await callTask;
+                    }
+                    finally
+                    {
+                        backgroundCts.Dispose();
+                    }
                 }
-                catch (Exception) when (linkedCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                else
                 {
-                    // 逾時（而非外部取消）：回傳原文、不寫入快取，並發送 TIMEOUT Job 通知 UI
                     swModel.Stop();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        // 呼叫端取消（PotPlayer 斷線等）：照原本行為往外拋 OperationCanceledException；
+                        // 背景請求繼續，由背景完成處理接手
+                        StartBackgroundCompletion(callTask, backgroundCts, job.Id, request.Current, systemPrompt, previous, startedAt);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
+                    // 等待逾時（而非外部取消）：回傳原文、不寫入快取，並發送 TIMEOUT Job 通知 UI
+                    // （沿用原本的句子編號：llm_calls 的紀錄以 job.Id 對回 subtitle_log，在請求真正結束時記錄）
                     WeakReferenceMessenger.Default.Send(new TranslationJob
                     {
-                        // 沿用原本的句子編號：llm_calls 的逾時紀錄以 job.Id 對回 subtitle_log
                         Id = job.Id,
                         Current = request.Current,
                         RawSource = rawSource,
@@ -550,6 +721,7 @@ public class TranslationManager
                         ModelLatency = swModel.ElapsedMilliseconds,
                         Source = TranslationSource.Timeout
                     });
+                    StartBackgroundCompletion(callTask, backgroundCts, job.Id, request.Current, systemPrompt, previous, startedAt);
                     return request.Current;
                 }
             }
@@ -634,10 +806,173 @@ public class TranslationManager
         return processedResult;
     }
 
+    /// <summary>登記背景完成請求（同時最多一筆）並在背景處理其完成；已有一筆進行中時只觀察結果、不補記。</summary>
+    private void StartBackgroundCompletion(
+        Task<ChatResult> callTask,
+        CancellationTokenSource callCts,
+        string jobId,
+        string current,
+        string systemPrompt,
+        RecentItem? previous,
+        long startedAtTimestamp)
+    {
+        BackgroundRequest? request = null;
+        lock (_backgroundLock)
+        {
+            if (_background is null)
+            {
+                _background = request = new BackgroundRequest
+                {
+                    CallTask = callTask,
+                    CallCts = callCts,
+                    JobId = jobId,
+                    Current = current,
+                    SystemPrompt = systemPrompt,
+                    Previous = previous,
+                    StartedAtTimestamp = startedAtTimestamp
+                };
+            }
+        }
+
+        if (request is null)
+        {
+            _ = ObserveCallAsync(callTask, callCts);
+        }
+        else
+        {
+            _ = ProcessBackgroundCompletionAsync(request);
+        }
+    }
+
+    /// <summary>已有背景請求進行中時：只觀察結果與處置資源（例外已在 SendCurrentAsync 記進 llm_calls），不寫快取、不進歷史。</summary>
+    private static async Task ObserveCallAsync(Task<ChatResult> callTask, CancellationTokenSource callCts)
+    {
+        try
+        {
+            await callTask.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 這裡不能再對背景請求做任何事：只避免未觀察例外
+        }
+        callCts.Dispose();
+    }
+
+    /// <summary>背景完成處理：請求在背景跑完後，成功結果寫入快取；多輪模式下 system prompt 與送出時相同時
+    /// 補進對話歷史，並依序補記背景期間暫存的快取命中輪次。失敗、被上限取消或不成功的結果只記 Debug log，
+    /// 不寫快取、不進歷史。不再發新的 Job、也不改已送出的 TIMEOUT Job：之後同一句再出現就會命中快取。</summary>
+    private async Task ProcessBackgroundCompletionAsync(BackgroundRequest request)
+    {
+        ChatResult? result = null;
+        try
+        {
+            result = await request.CallTask.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 失敗或被 30 秒上限取消：例外已由 SendCurrentAsync 記進 llm_calls，不寫快取、不進歷史
+        }
+        finally
+        {
+            request.CallCts.Dispose();
+        }
+
+        try
+        {
+            var elapsedMs = Stopwatch.GetElapsedTime(request.StartedAtTimestamp).TotalMilliseconds;
+
+            // 背景結束（不論成功或失敗）：清出進行中槽位與暫存的快取命中輪次，稍後依序補記
+            List<ChatTurn> pending;
+            lock (_backgroundLock)
+            {
+                _background = null;
+                pending = [.. _pendingHistoryTurns];
+                _pendingHistoryTurns.Clear();
+            }
+
+            // 結果判斷與後處理照成功路徑：截斷、空白、崩壞皆不算成功
+            var success = false;
+            var processed = string.Empty;
+            if (result is not null)
+            {
+                processed = _textService.PostProcess(result.Content, request.Current);
+                success = !result.Truncated
+                    && !CollapseDetector.IsCollapsed(request.Current, processed)
+                    && !string.IsNullOrWhiteSpace(processed);
+            }
+            if (success)
+            {
+                // 快取存「替換前」譯文（與成功路徑相同）
+                _db.SaveCache(request.Current, processed);
+            }
+
+            // 多輪模式：目前的 system prompt 和送出時相同才補進對話歷史（規則同成功路徑：
+            // 有 previous 用 Replace，否則 Append；歷史存模型原始輸出，才能接續伺服器快取）。
+            // 不同就只寫快取。暫存輪次也只在 system 未變時補記（背景那句必須在前，
+            // 下一句請求的開頭才會和伺服器留下的檢查點一致）
+            var systemUnchanged = string.Equals(
+                PromptBuilder.BuildSystemPrompt(_settings.Current, _glossary?.PromptSection),
+                request.SystemPrompt,
+                StringComparison.Ordinal);
+            if (systemUnchanged)
+            {
+                if (success && result is not null)
+                {
+                    if (request.Previous is null || !_session.Replace(request.Previous.HistoryUser, request.Current, result.Content))
+                    {
+                        _session.Append(request.Current, result.Content);
+                    }
+                }
+                foreach (var turn in pending)
+                {
+                    _session.Append(turn.User, turn.Assistant);
+                }
+            }
+
+            if (success)
+            {
+                if (systemUnchanged)
+                {
+                    _logger?.LogInformation("背景完成：{Elapsed} ms，已寫入快取並補進對話歷史", elapsedMs);
+                }
+                else
+                {
+                    _logger?.LogInformation("背景完成：{Elapsed} ms，已寫入快取", elapsedMs);
+                }
+            }
+            else
+            {
+                _logger?.LogDebug("背景完成：結果失敗或不成功（{Elapsed} ms），不寫快取、不進歷史", elapsedMs);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 背景補記絕不能拋出例外（會成為未觀察例外）
+            _logger?.LogDebug(ex, "背景完成：處理補記時發生錯誤");
+        }
+    }
+
+    /// <summary>背景請求進行中而 system prompt 已改變（對話被重置）時，清空暫存的歷史輪次。</summary>
+    private void ClearPendingHistoryIfSystemChanged(string systemPrompt)
+    {
+        lock (_backgroundLock)
+        {
+            if (_background is not null &&
+                !string.Equals(_background.SystemPrompt, systemPrompt, StringComparison.Ordinal))
+            {
+                _pendingHistoryTurns.Clear();
+            }
+        }
+    }
+
     /// <summary>清空多輪對話歷史與最近字幕清單。</summary>
     public void ResetConversation()
     {
         _session.Reset();
+        lock (_backgroundLock)
+        {
+            _pendingHistoryTurns.Clear();
+        }
         lock (_recentLock)
         {
             _recent.Clear();
@@ -802,6 +1137,9 @@ public class TranslationManager
     {
         var s = _settings.Current;
         if (!s.Translation.UseConversationMode) return Task.CompletedTask;
+
+        // 背景請求進行中：它本身就會讓伺服器留下檢查點，再預熱只會排隊並打亂順序
+        if (_background is not null) return Task.CompletedTask;
 
         _session.MaxTurns = s.Translation.ConversationMaxTurns;
         _session.KeepTurns = s.Translation.ConversationKeepTurns;

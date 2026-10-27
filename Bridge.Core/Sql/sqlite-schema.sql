@@ -209,3 +209,18 @@ CREATE TABLE IF NOT EXISTS LlmCalls (
 CREATE INDEX IF NOT EXISTS IX_LlmCalls_CreatedAt ON LlmCalls(CreatedAt);
 CREATE INDEX IF NOT EXISTS IX_LlmCalls_StreamId ON LlmCalls(StreamId);
 CREATE INDEX IF NOT EXISTS IX_LlmCalls_JobId ON LlmCalls(JobId);
+
+-- 影片章節：說明欄、留言セトリ或人工貼上的章節與譯名，重開同一支影片直接使用
+CREATE TABLE IF NOT EXISTS VideoChapters (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,  -- 流水號
+    VideoId TEXT NOT NULL,                 -- YouTube 影片 ID（11 碼）
+    StartMs INTEGER NOT NULL,              -- 章節開始毫秒
+    Title TEXT NOT NULL,                   -- 章節標題（原文）
+    Translation TEXT,                      -- 章節標題中文譯名；翻譯失敗為空
+    DurationMs INTEGER,                    -- 原曲長度（LRCLIB），左上角章節名顯示到唱完；查不到為空
+    Source TEXT NOT NULL,                  -- 章節來源：Manual（人工貼上）| Description（說明欄）| Comment（留言セトリ）
+    CreatedAt DATETIME NOT NULL DEFAULT (datetime('now')),  -- 寫入時間
+    UpdatedAt DATETIME,                    -- 最後一次覆寫的時間
+    UNIQUE(VideoId, StartMs)
+);
+CREATE INDEX IF NOT EXISTS IX_VideoChapters_VideoId ON VideoChapters(VideoId);

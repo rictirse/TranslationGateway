@@ -19,5 +19,7 @@ public sealed record StreamMetadata(StreamPlatform Platform, string? Id, string?
 /// <summary>開啟直播的結果：Success 附上使用者可讀的訊息，成功時 Metadata 可能仍為 null（查不到中繼資料）。</summary>
 /// <param name="Blocked">被 YouTube 擋下（匿名存取次數太多）：沒有跑 streamlink、沒有開播放器。</param>
 /// <param name="BlockedReason">被擋的判斷依據（給使用者看的短句）；沒有被擋時為 null。</param>
+/// <param name="HelpUrl">失敗原因缺套件（streamlink／PotPlayer）時的下載頁網址；狀態列顯示「前往下載」按鈕用；其他情況為 null。</param>
+/// <param name="HelpLabel">「前往下載」按鈕的文字；沒有 HelpUrl 時為 null。</param>
 public sealed record StreamLaunchResult(bool Success, string Message, StreamMetadata? Metadata,
-    bool Blocked = false, string? BlockedReason = null);
+    bool Blocked = false, string? BlockedReason = null, string? HelpUrl = null, string? HelpLabel = null);

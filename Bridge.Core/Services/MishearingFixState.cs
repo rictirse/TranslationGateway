@@ -89,9 +89,31 @@ public sealed class MishearingFixState(ILogger<MishearingFixState>? logger = nul
             if (ReferenceEquals(replaced, result)) continue;
             result = replaced;
             appliedFixIds?.Add(fix.Id);
-            logger?.LogInformation("聽錯字修正：{Wrong} → {Right}（{CardName}）", fix.Wrong, fix.Right, fix.CardName);
+            if (ShouldLog(fix.Id, text))
+            {
+                logger?.LogInformation("聽錯字修正：{Wrong} → {Right}（{CardName}）", fix.Wrong, fix.Right, fix.CardName);
+            }
         }
         return result;
+    }
+
+    /// <summary>已記過 log 的（修正 Id、原句）：錄影預翻每秒都會對附近幾句重算原文，同一句每秒記一次會洗版（使用者實測一秒兩行）。
+    /// 同一句同一筆修正只記第一次；超過上限就整個清掉重來（只影響 log，不影響修正本身）。</summary>
+    private readonly HashSet<(long FixId, string Text)> _logged = [];
+
+    private const int MaxLoggedEntries = 2000;
+
+    private bool ShouldLog(long fixId, string text)
+    {
+        lock (_lock)
+        {
+            if (_logged.Count >= MaxLoggedEntries)
+            {
+                _logged.Clear();
+            }
+
+            return _logged.Add((fixId, text));
+        }
     }
 
     /// <summary>把 wrong 換成 right，但已經是正確寫法的地方不動：正確寫法包含錯字時

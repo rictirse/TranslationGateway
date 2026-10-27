@@ -202,7 +202,7 @@ public class OpenAiClientTests
     }
 
     [Fact]
-    public async Task WarmUpAsync_SendsMaxTokensOneWithoutTrailingUser()
+    public async Task WarmUpAsync_SendsMaxTokensOne_EndsAtLastHistoryUser()
     {
         var handler = new StubHandler(StopCompletionJson);
         var sut = CreateSut(handler);
@@ -218,16 +218,16 @@ public class OpenAiClientTests
             Assert.Equal("system", role);
         }
 
-        await sut.WarmUpAsync("system text", [new ChatTurn("u1", "a1")], TestContext.Current.CancellationToken);
+        // 有歷史：送到最後一輪的 user 為止，不含它的 assistant（下一句的請求會以這段為開頭）
+        await sut.WarmUpAsync("system text", [new ChatTurn("u1", "a1"), new ChatTurn("u2", "a2")], TestContext.Current.CancellationToken);
 
         Assert.NotNull(handler.RequestBody);
         using (var doc = JsonDocument.Parse(handler.RequestBody!))
         {
             Assert.Equal(1, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
-            var roles = doc.RootElement.GetProperty("messages").EnumerateArray()
-                .Select(m => m.GetProperty("role").GetString())
-                .ToArray();
-            Assert.Equal(["system", "user", "assistant"], roles);
+            var messages = doc.RootElement.GetProperty("messages").EnumerateArray().ToArray();
+            Assert.Equal(["system", "user", "assistant", "user"], messages.Select(m => m.GetProperty("role").GetString()).ToArray());
+            Assert.Equal("u2", messages[^1].GetProperty("content").GetString());
         }
     }
 

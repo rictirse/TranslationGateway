@@ -12,7 +12,7 @@ namespace Translation.Bridge.Core.Services;
 /// PostgreSQL 翻譯快取後端。建構子只組連線字串不連線；
 /// 連線失敗時進入斷線狀態 30 秒（期間不嘗試連線），確保翻譯流程不被資料庫問題拖住。
 /// </summary>
-public sealed class PostgresTranslationStore : ITranslationStore, IGlossaryStore, ISubtitleLogStore, ICaptionStore, IAuditStore
+public sealed class PostgresTranslationStore : ITranslationStore, IGlossaryStore, ISubtitleLogStore, ICaptionStore, IAuditStore, IVideoChapterStore
 {
     /// <summary>斷線後暫停嘗試連線的時間。</summary>
     private static readonly TimeSpan UnavailableWindow = TimeSpan.FromSeconds(30);
@@ -994,6 +994,94 @@ public sealed class PostgresTranslationStore : ITranslationStore, IGlossaryStore
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "寫入 caption_sentences 失敗：caption {CaptionId}", captionId);
+        }
+    }
+
+    // ===== IVideoChapterStore（都走 ExecuteWithFallback：失敗不擲例外，讀取回空清單、寫入刪除只記 Warning） =====
+
+    /// <summary>這支影片存的章節（依 start_ms 排序）；沒有或連線失敗時回傳空清單。</summary>
+    public IReadOnlyList<StoredVideoChapter> GetVideoChapters(string videoId)
+    {
+        try
+        {
+            return ExecuteWithFallback<IReadOnlyList<StoredVideoChapter>>(() =>
+            {
+                using var connection = OpenConnection();
+                return connection.Query<StoredVideoChapter>(@"
+                    SELECT start_ms AS StartMs,
+                           title AS Title,
+                           translation AS Translation,
+                           duration_ms AS DurationMs,
+                           source AS Source
+                    FROM video_chapters
+                    WHERE video_id = @videoId
+                    ORDER BY start_ms", new { videoId }).ToList();
+            }, []);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "讀取 video_chapters 失敗：{VideoId}", videoId);
+            return [];
+        }
+    }
+
+    /// <summary>同一個交易內刪掉這支影片的全部章節再寫入 chapters（全部同一個 Source）；失敗只記 Warning。</summary>
+    public void ReplaceVideoChapters(string videoId, IReadOnlyList<StoredVideoChapter> chapters)
+    {
+        try
+        {
+            ExecuteWithFallback<object?>(() =>
+            {
+                using var connection = OpenConnection();
+                using var transaction = connection.BeginTransaction();
+                try
+                {
+                    connection.Execute(
+                        "DELETE FROM video_chapters WHERE video_id = @videoId", new { videoId }, transaction);
+                    connection.Execute(@"
+                        INSERT INTO video_chapters (video_id, start_ms, title, translation, duration_ms, source, created_at, updated_at)
+                        VALUES (@videoId, @StartMs, @Title, @Translation, @DurationMs, @Source, now(), now())",
+                        chapters.Select(chapter => new
+                        {
+                            videoId,
+                            chapter.StartMs,
+                            chapter.Title,
+                            chapter.Translation,
+                            chapter.DurationMs,
+                            chapter.Source
+                        }),
+                        transaction);
+                    transaction.Commit();
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
+                }
+                return null;
+            }, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "寫入 video_chapters 失敗：{VideoId}", videoId);
+        }
+    }
+
+    /// <summary>刪掉這支影片的全部章節；失敗只記 Warning。</summary>
+    public void DeleteVideoChapters(string videoId)
+    {
+        try
+        {
+            ExecuteWithFallback<object?>(() =>
+            {
+                using var connection = OpenConnection();
+                connection.Execute("DELETE FROM video_chapters WHERE video_id = @videoId", new { videoId });
+                return null;
+            }, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "刪除 video_chapters 失敗：{VideoId}", videoId);
         }
     }
 

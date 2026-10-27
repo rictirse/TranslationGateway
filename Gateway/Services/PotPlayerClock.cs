@@ -9,12 +9,15 @@ namespace Translation.Gateway.Services;
 /// （使用者實測快轉後也正確）。用 SendMessageTimeout 限時等待，PotPlayer 卡住時不會拖住翻譯執行緒；
 /// 找不到視窗、送訊息失敗或回傳值不合理時一律回傳 null，絕不擲例外。
 /// </summary>
-public sealed class PotPlayerClock : IPlaybackClock
+public sealed class PotPlayerClock : IPlaybackClock, IPlaybackSeeker
 {
     private const uint WM_USER = 0x0400;
 
     /// <summary>查詢播放位置的自訂訊息參數（PotPlayer 擴充訊息）。</summary>
     private const long GetPositionCommand = 0x5004;
+
+    /// <summary>跳到指定位置的自訂訊息參數（PotPlayer 擴充訊息；0x5005 尚待使用者實機確認）。</summary>
+    private const long SeekCommand = 0x5005;
 
     private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint SMTO_BLOCK = 0x0001;
@@ -59,6 +62,44 @@ public sealed class PotPlayerClock : IPlaybackClock
         {
             // 任何例外（取得行程資訊等）都不影響翻譯流程
             return null;
+        }
+    }
+
+    /// <summary>讓 PotPlayer 跳到指定位置：送 WM_USER(0x0400)、wParam 0x5005、lParam 為毫秒數
+    ///（與 0x5004 同一族的外部控制訊息，但 0x5005 尚未經使用者實測，實機確認前先做成可測版本）。
+    /// positionMs &lt; 0、找不到視窗或送訊息失敗回 false，絕不擲例外。
+    /// SendMessageTimeout 最多等 200ms，呼叫端不得在 UI 執行緒使用。</summary>
+    public bool SeekTo(long positionMs)
+    {
+        if (positionMs < 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var handle = GetMainWindowHandle();
+            if (handle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var sent = SendMessageTimeout(
+                handle, WM_USER, (IntPtr)SeekCommand, (IntPtr)positionMs,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK, SendMessageTimeoutMs, out _);
+            if (sent == IntPtr.Zero)
+            {
+                // 送訊息失敗（逾時或對方沒回應）：清掉快取，下次重新找視窗
+                ClearCache();
+                return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            // 任何例外（取得行程資訊等）都不影響呼叫端
+            return false;
         }
     }
 

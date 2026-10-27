@@ -20,43 +20,63 @@
 
         <!-- 標題與即時統計 -->
         <DockPanel Grid.Row="0" Margin="0,0,0,10">
-            <Border DockPanel.Dock="Right" CornerRadius="12" Padding="12,4" VerticalAlignment="Center"
-                    ToolTip="依 Dashboard 上的字幕計算（每 10 秒更新）；P95 = 95% 的句子都在這個時間內完成">
-                <Border.Style>
-                    <Style TargetType="Border">
-                        <Setter Property="Background" Value="#E9EEF5"/>
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding StatsWarning}" Value="True">
-                                <Setter Property="Background" Value="#FCEFD9"/>
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </Border.Style>
-                <TextBlock Text="{Binding StatsText}" FontSize="12">
+            <!-- 右側兩行：上面聽錯字探勘狀態＋立即探勘，下面翻譯即時統計（排成兩行，左邊的標題才有空間） -->
+            <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0,0,0">
+                <!-- 聽錯字探勘狀態膠囊；按鈕可略過間隔立刻探勘 -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Border CornerRadius="12" Padding="12,4" Background="#E9EEF5" VerticalAlignment="Center"
+                            ToolTip="{Binding MishearingStatusToolTip}">
+                        <TextBlock Text="{Binding MishearingStatusText}" FontSize="12"
+                                   Foreground="{StaticResource SubTextBrush}"/>
+                    </Border>
+                    <Button Content="立即探勘" Margin="6,0,0,0" Padding="8,1" VerticalAlignment="Center"
+                            Command="{Binding MineMishearingNowCommand}"
+                            ToolTip="略過間隔與新字幕下限，馬上用時間窗內的字幕跑一次聽錯字探勘"/>
+                </StackPanel>
+                <Border HorizontalAlignment="Right" Margin="0,4,0,0" CornerRadius="12" Padding="12,4"
+                        ToolTip="依 Dashboard 上的字幕計算（每 10 秒更新）；P95 = 95% 的句子都在這個時間內完成">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="#E9EEF5"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StatsWarning}" Value="True">
+                                    <Setter Property="Background" Value="#FCEFD9"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding StatsText}" FontSize="12">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource SubTextBrush}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding StatsWarning}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource WarnTextBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Border>
+            </StackPanel>
+            <!-- 頁首：這場的標題（譯文大字粗體在上、日文原文小字在下）；還沒開台時只有「字幕監看」 -->
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="{Binding HeaderTitle}" Style="{StaticResource PageTitle}" FontWeight="Bold"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding HeaderTitle}"/>
+                <TextBlock Text="{Binding HeaderSubtitle}" FontSize="16" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding HeaderSubtitle}">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Foreground" Value="{StaticResource SubTextBrush}"/>
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding StatsWarning}" Value="True">
-                                    <Setter Property="Foreground" Value="{StaticResource WarnTextBrush}"/>
+                                <DataTrigger Binding="{Binding HeaderSubtitle}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
-            </Border>
-            <!-- 聽錯字探勘狀態膠囊：排在統計膠囊左邊（同樣 Dock=Right、宣告在後）；按鈕可略過間隔立刻探勘 -->
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Border CornerRadius="12" Padding="12,4" Background="#E9EEF5" VerticalAlignment="Center"
-                        ToolTip="{Binding MishearingStatusToolTip}">
-                    <TextBlock Text="{Binding MishearingStatusText}" FontSize="12"
-                               Foreground="{StaticResource SubTextBrush}"/>
-                </Border>
-                <Button Content="立即探勘" Margin="6,0,8,0" Padding="8,1" VerticalAlignment="Center"
-                        Command="{Binding MineMishearingNowCommand}"
-                        ToolTip="略過間隔與新字幕下限，馬上用時間窗內的字幕跑一次聽錯字探勘"/>
             </StackPanel>
-            <TextBlock Text="字幕監看" Style="{StaticResource PageTitle}" VerticalAlignment="Center"/>
         </DockPanel>
 
         <!-- 直播資訊與修正規則 -->
@@ -97,128 +117,240 @@
                                 <ColumnDefinition Width="12"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="情境（只存在設定檔，不寫回詞彙卡）"
-                                           Style="{StaticResource Hint}" Margin="0,0,0,3"/>
-                                <TextBox AcceptsReturn="True" TextWrapping="Wrap" Height="96"
-                                         VerticalScrollBarVisibility="Auto"
-                                         Text="{Binding StreamSituation, UpdateSourceTrigger=PropertyChanged, Delay=500}"/>
-                                <WrapPanel Margin="0,4,0,0">
-                                    <ItemsControl ItemsSource="{Binding MiningResultTags}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <StackPanel Orientation="Horizontal"/>
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Button Command="{Binding DataContext.CopyMiningTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                        CommandParameter="{Binding}"
-                                                        IsEnabled="{Binding CanCopy}"
-                                                        Cursor="Hand">
-                                                    <Button.ToolTip>
-                                                        <ToolTip ContentStringFormat="點一下複製「{0}」" Content="{Binding CopyText}"/>
-                                                    </Button.ToolTip>
-                                                    <Button.Style>
-                                                        <Style TargetType="Button">
-                                                            <Style.Triggers>
-                                                                <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter Property="Opacity" Value="0.8"/>
-                                                                </Trigger>
-                                                                <Trigger Property="IsPressed" Value="True">
-                                                                    <Setter Property="Opacity" Value="0.6"/>
-                                                                </Trigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Button.Style>
-                                                    <Button.Template>
-                                                        <ControlTemplate TargetType="Button">
-                                                            <ContentPresenter/>
-                                                        </ControlTemplate>
-                                                    </Button.Template>
-                                                    <Border CornerRadius="3" Padding="5,1" Margin="0,1,6,1">
-                                                        <Border.Style>
-                                                            <Style TargetType="Border">
-                                                                <Setter Property="Background" Value="#E9EEF5"/>
+                            <!-- 左欄：分頁［情境｜歌曲清單］；歌曲清單分頁只在錄影時顯示（Visibility 綁 ShowSongList） -->
+                            <TabControl Grid.Column="0" SelectedIndex="{Binding InfoTabIndex, Mode=TwoWay}">
+                                <TabItem Header="情境">
+                                    <StackPanel>
+                                        <TextBlock Text="情境（只存在設定檔，不寫回詞彙卡）"
+                                                   Style="{StaticResource Hint}" Margin="0,0,0,3"/>
+                                        <TextBox AcceptsReturn="True" TextWrapping="Wrap" Height="96"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 Text="{Binding StreamSituation, UpdateSourceTrigger=PropertyChanged, Delay=500}"/>
+                                        <WrapPanel Margin="0,4,0,0">
+                                            <ItemsControl ItemsSource="{Binding MiningResultTags}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Horizontal"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Command="{Binding DataContext.CopyMiningTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"
+                                                                IsEnabled="{Binding CanCopy}"
+                                                                Cursor="Hand">
+                                                            <Button.ToolTip>
+                                                                <ToolTip ContentStringFormat="點一下複製「{0}」" Content="{Binding CopyText}"/>
+                                                            </Button.ToolTip>
+                                                            <Button.Style>
+                                                                <Style TargetType="Button">
+                                                                    <Style.Triggers>
+                                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                                            <Setter Property="Opacity" Value="0.8"/>
+                                                                        </Trigger>
+                                                                        <Trigger Property="IsPressed" Value="True">
+                                                                            <Setter Property="Opacity" Value="0.6"/>
+                                                                        </Trigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                            <Button.Template>
+                                                                <ControlTemplate TargetType="Button">
+                                                                    <ContentPresenter/>
+                                                                </ControlTemplate>
+                                                            </Button.Template>
+                                                            <Border CornerRadius="3" Padding="5,1" Margin="0,1,6,1">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="Background" Value="#E9EEF5"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding Kind}" Value="Matched">
+                                                                                <Setter Property="Background" Value="#E3F2E6"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Kind}" Value="AddedAlias">
+                                                                                <Setter Property="Background" Value="#E3F2E6"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Kind}" Value="Created">
+                                                                                <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Kind}" Value="Candidate">
+                                                                                <Setter Property="Background" Value="#EFEFEF"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Kind}" Value="NotFound">
+                                                                                <Setter Property="Background" Value="#FCEFD9"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Kind}" Value="Failed">
+                                                                                <Setter Property="Background" Value="#F9E3E3"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <TextBlock Text="{Binding Text}" FontSize="11">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="Matched">
+                                                                                    <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="AddedAlias">
+                                                                                    <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="Created">
+                                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="NotFound">
+                                                                                    <Setter Property="Foreground" Value="{StaticResource WarnTextBrush}"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="Failed">
+                                                                                    <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </Border>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <Button Content="資料探勘" Style="{StaticResource PrimaryButton}" Padding="8,1" FontSize="11"
+                                                    VerticalAlignment="Center" Margin="2,1,0,1"
+                                                    IsEnabled="{Binding CanStartMining}"
+                                                    ToolTip="{Binding MiningDisabledToolTip}"
+                                                    Command="{Binding MineSituationCommand}"/>
+                                            <TextBlock Text="{Binding MiningProgressText}" Style="{StaticResource Hint}" FontSize="11"
+                                                       VerticalAlignment="Center" Margin="8,1,6,1" TextTrimming="CharacterEllipsis"
+                                                       MaxWidth="260" ToolTip="{Binding MiningProgressText}"/>
+                                            <Button Content="取消" Padding="8,1" FontSize="11" VerticalAlignment="Center"
+                                                    Command="{Binding CancelMiningCommand}"
+                                                    ToolTip="取消執行中的資料探勘">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsMining}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <TextBlock Text="未設定知識庫模型：只有開台探勘會用翻譯模型執行" Style="{StaticResource Hint}" FontSize="11"
+                                                       VerticalAlignment="Center" Margin="2,1,0,1"
+                                                       ToolTip="手動探勘、成員探勘與排程的聽錯字探勘需要知識庫模型；開台探勘在只設定翻譯模型時會借用翻譯模型"
+                                                       Visibility="{Binding ShowLorebookMissingHint, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </TabItem>
+                                <TabItem Visibility="{Binding ShowSongList, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TabItem.Header>
+                                        <TextBlock Text="{Binding SongList.Count, StringFormat='歌曲清單 {0}'}"/>
+                                    </TabItem.Header>
+                                    <DockPanel>
+                                        <!-- 上方一列：來源說明（左）與貼上／清除按鈕（右） -->
+                                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,3">
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                                <Button Content="清除人工章節" Padding="8,1" FontSize="11"
+                                                        Command="{Binding ClearManualChaptersCommand}"
+                                                        ToolTip="刪掉人工貼上的章節，改回自動抓到的（說明欄→留言セトリ）"/>
+                                                <Button Content="從剪貼簿貼上" Style="{StaticResource PrimaryButton}" Padding="8,1" FontSize="11"
+                                                        Margin="6,0,0,0" Command="{Binding PasteChaptersCommand}"
+                                                        ToolTip="把剪貼簿的セトリ（每行 時間戳＋曲名）貼上成章節清單；找不到章節時也可以用"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding SongListSourceText}" Style="{StaticResource Hint}"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                        <!-- 貼上結果等短訊息：空字串時收合 -->
+                                        <TextBlock DockPanel.Dock="Top" Text="{Binding SongListMessage}" Margin="0,0,0,3"
+                                                   TextWrapping="Wrap" Foreground="{StaticResource AccentBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SongListMessage}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <!-- 歌曲清單：點整列讓 PotPlayer 跳轉；IsPlaying 時左側 3px 金色細線（預留透明邊線，只換顏色） -->
+                                        <ListBox ItemsSource="{Binding SongList}" Height="120"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 ToolTip="點一下讓 PotPlayer 跳到這首歌的開始時間">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Cursor="Hand" HorizontalContentAlignment="Stretch"
+                                                            Command="{Binding DataContext.SeekToSongCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                            CommandParameter="{Binding}"
+                                                            ToolTip="點一下讓 PotPlayer 跳到這首歌的開始時間">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button">
                                                                 <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding Kind}" Value="Matched">
-                                                                        <Setter Property="Background" Value="#E3F2E6"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Kind}" Value="AddedAlias">
-                                                                        <Setter Property="Background" Value="#E3F2E6"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Kind}" Value="Created">
-                                                                        <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Kind}" Value="Candidate">
-                                                                        <Setter Property="Background" Value="#EFEFEF"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Kind}" Value="NotFound">
-                                                                        <Setter Property="Background" Value="#FCEFD9"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Kind}" Value="Failed">
-                                                                        <Setter Property="Background" Value="#F9E3E3"/>
-                                                                    </DataTrigger>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter Property="Opacity" Value="0.8"/>
+                                                                    </Trigger>
+                                                                    <Trigger Property="IsPressed" Value="True">
+                                                                        <Setter Property="Opacity" Value="0.6"/>
+                                                                    </Trigger>
                                                                 </Style.Triggers>
                                                             </Style>
-                                                        </Border.Style>
-                                                        <TextBlock Text="{Binding Text}" FontSize="11">
-                                                            <TextBlock.Style>
-                                                                <Style TargetType="TextBlock">
-                                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                        </Button.Style>
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <ContentPresenter/>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <Border BorderThickness="3,0,0,0" Padding="4,2" Margin="0,1">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Setter Property="BorderBrush" Value="Transparent"/>
                                                                     <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding Kind}" Value="Matched">
-                                                                            <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Kind}" Value="AddedAlias">
-                                                                            <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Kind}" Value="Created">
-                                                                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Kind}" Value="NotFound">
-                                                                            <Setter Property="Foreground" Value="{StaticResource WarnTextBrush}"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Kind}" Value="Failed">
-                                                                            <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}"/>
+                                                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                                            <Setter Property="BorderBrush" Value="#E0A800"/>
                                                                         </DataTrigger>
                                                                     </Style.Triggers>
                                                                 </Style>
-                                                            </TextBlock.Style>
-                                                        </TextBlock>
-                                                    </Border>
-                                                </Button>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <Button Content="資料探勘" Style="{StaticResource PrimaryButton}" Padding="8,1" FontSize="11"
-                                            VerticalAlignment="Center" Margin="2,1,0,1"
-                                            IsEnabled="{Binding CanStartMining}"
-                                            ToolTip="{Binding MiningDisabledToolTip}"
-                                            Command="{Binding MineSituationCommand}"/>
-                                    <TextBlock Text="{Binding MiningProgressText}" Style="{StaticResource Hint}" FontSize="11"
-                                               VerticalAlignment="Center" Margin="8,1,6,1" TextTrimming="CharacterEllipsis"
-                                               MaxWidth="260" ToolTip="{Binding MiningProgressText}"/>
-                                    <Button Content="取消" Padding="8,1" FontSize="11" VerticalAlignment="Center"
-                                            Command="{Binding CancelMiningCommand}"
-                                            ToolTip="取消執行中的資料探勘">
-                                        <Button.Style>
-                                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsMining}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Button.Style>
-                                    </Button>
-                                    <TextBlock Text="未設定知識庫模型：只有開台探勘會用翻譯模型執行" Style="{StaticResource Hint}" FontSize="11"
-                                               VerticalAlignment="Center" Margin="2,1,0,1"
-                                               ToolTip="手動探勘、成員探勘與排程的聽錯字探勘需要知識庫模型；開台探勘在只設定翻譯模型時會借用翻譯模型"
-                                               Visibility="{Binding ShowLorebookMissingHint, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-                                </WrapPanel>
-                            </StackPanel>
+                                                            </Border.Style>
+                                                            <StackPanel>
+                                                                <DockPanel>
+                                                                    <TextBlock DockPanel.Dock="Left" Text="{Binding TimeRangeText}"
+                                                                               Foreground="{StaticResource MutedTextBrush}" FontSize="11"
+                                                                               VerticalAlignment="Center"/>
+                                                                    <TextBlock Text="{Binding Translation}" FontWeight="Bold" Margin="8,0,0,0"
+                                                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding Translation}" Value="{x:Null}">
+                                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                </DockPanel>
+                                                                <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                           Foreground="{StaticResource SubTextBrush}"
+                                                                           TextTrimming="CharacterEllipsis"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </DockPanel>
+                                </TabItem>
+                            </TabControl>
                             <StackPanel Grid.Column="2" x:Name="GlossaryPanel">
                                 <DockPanel Margin="0,0,0,3">
                                     <Button DockPanel.Dock="Right" Content="↻" Padding="6,1" Margin="6,0,0,0"
@@ -430,6 +562,9 @@
             </DataGrid.ContextMenu>
             <DataGrid.RowStyle>
                 <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
+                    <!-- 每列都預留透明的 3px 左邊線：高亮時只換顏色，內容不會左右跳動 -->
+                    <Setter Property="BorderBrush" Value="Transparent"/>
+                    <Setter Property="BorderThickness" Value="3,0,0,0"/>
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding Source}" Value="{x:Static models:TranslationSource.Cache}">
                             <Setter Property="Background" Value="#F2F7FD"/>
@@ -446,6 +581,10 @@
                         <DataTrigger Binding="{Binding Source}" Value="{x:Static models:TranslationSource.ThroughPass}">
                             <Setter Property="Background" Value="#F5F5F5"/>
                             <Setter Property="ToolTip" Value="直通模式"/>
+                        </DataTrigger>
+                        <!-- 錄影時 PotPlayer 目前播放到的那一句：只加左側金色細線（不改底色、不改字型，來源底色照舊） -->
+                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                            <Setter Property="BorderBrush" Value="#E0A800"/>
                         </DataTrigger>
                     </Style.Triggers>
                 </Style>

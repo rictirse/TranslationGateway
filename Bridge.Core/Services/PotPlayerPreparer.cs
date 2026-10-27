@@ -10,6 +10,7 @@ public sealed record PotPlayerPrepareResult(bool Success, string? PlayerPath, st
 
 /// <summary>開台前準備 PotPlayer：把 port 寫死進翻譯腳本寫入安裝目錄（不能寫就複製整個 PotPlayer 到 Gateway 的資料夾用複本），
 /// 並改登錄檔選好翻譯引擎與自動翻譯。複本是免安裝版的行為，Model 和 Engine 用連結共用 %APPDATA%\<exe 名稱> 底下的同名資料夾。
+/// 複本要不要更新看整個安裝目錄的指紋，不能只看 exe：PotPlayer 更新常只換 DLL／腳本不換 exe，只比 exe 會讓複本停在舊版。
 /// PotPlayer 只在啟動時讀設定，呼叫前必須先關閉所有 PotPlayer。</summary>
 public sealed class PotPlayerPreparer(
     ISettingsService settings,
@@ -19,7 +20,8 @@ public sealed class PotPlayerPreparer(
     string copyRoot,
     ILogger<PotPlayerPreparer> logger,
     string? userDataRoot = null,
-    IDirectoryJunction? junction = null)
+    IDirectoryJunction? junction = null,
+    Func<string>? loadChaptersHook = null)
 {
     private const string MarkerFileName = ".gateway-source.txt";
 
@@ -58,6 +60,10 @@ public sealed class PotPlayerPreparer(
             {
                 logger.LogInformation("已更新 PotPlayer 翻譯腳本：{Path}", installScriptPath);
             }
+
+            // 章節掛勾寫不進安裝目錄（權限被拒）也改用複本：翻譯腳本可能早就寫過（內容相同不重寫）或該資料夾剛好可寫，
+            // 只看翻譯腳本會誤判成「安裝目錄可寫」，結果 YouTube 解析腳本接不上、沒有留言章節（使用者筆電實際發生）
+            TryHookChaptersScript(Path.GetDirectoryName(source)!, rethrowAccessDenied: true);
 
             playerPath = source;
             message = string.Empty;
@@ -104,32 +110,46 @@ public sealed class PotPlayerPreparer(
         }
     }
 
-    /// <summary>準備 Gateway 的 PotPlayer 複本：來源變更（路徑、修改時間、大小）時整個重複製，之後把腳本寫進複本。
+    /// <summary>準備 Gateway 的 PotPlayer 複本：安裝目錄指紋（<see cref="BuildInstallFingerprint"/>）不同時整個重複製，
+    /// 之後把腳本寫進複本。不能只比 exe 的修改時間與大小：PotPlayer 更新常只換 DLL／腳本等幾十個檔案、exe 不動，
+    /// 只比 exe 會讓複本停在舊版，開 YouTube 錄影時常常失敗。指紋算不出來時也視為需要重複製。
     /// 複本是免安裝版的行為，Model 和 Engine 不複製，改用目錄連結共用 %APPDATA%\<exe 名稱> 底下的同名資料夾。
     /// 回傳複本裡的 exe 路徑。</summary>
     private string PrepareCopy(string source, string script, string scriptRelativePath)
     {
         var sourceFullPath = Path.GetFullPath(source);
-        var sourceInfo = new FileInfo(sourceFullPath);
         var markerPath = Path.Combine(copyRoot, MarkerFileName);
-        var markerContent = string.Join(Environment.NewLine,
-            sourceFullPath, sourceInfo.LastWriteTimeUtc.Ticks, sourceInfo.Length);
+        var fingerprint = BuildInstallFingerprint(sourceFullPath);
+        var markerMatches = fingerprint is not null
+            && File.Exists(markerPath)
+            && File.ReadAllText(markerPath) == fingerprint;
 
-        if (!File.Exists(markerPath) || File.ReadAllText(markerPath) != markerContent)
+        if (!markerMatches)
         {
+            // 指紋算不出來（BuildInstallFingerprint 已記 Warning）也視為需要重複製，這次不寫標記
+            var reason = File.Exists(markerPath) ? "指紋不同" : "沒有複本";
+            logger.LogInformation("PotPlayer 安裝目錄有變更（{Reason}），重新複製", reason);
+
             // 重複製前先把使用者放在複本裡的 Model／Engine 搬走（兩邊都有檔案時擲例外，不刪除、不複製）
             EnsureUserDataLinks(sourceFullPath, forRecopy: true);
 
             var stopwatch = Stopwatch.StartNew();
             DeleteCopyRoot();
             var files = CopyFiles(Path.GetDirectoryName(sourceFullPath)!, copyRoot);
-            File.WriteAllText(markerPath, markerContent, new UTF8Encoding(false));
+            if (fingerprint is not null)
+            {
+                File.WriteAllText(markerPath, fingerprint, new UTF8Encoding(false));
+            }
+
             stopwatch.Stop();
             logger.LogInformation("已複製 PotPlayer 到 {CopyRoot}（{Files} 個檔案，{Seconds:0.0} 秒）",
                 copyRoot, files, stopwatch.Elapsed.TotalSeconds);
         }
 
         WriteScriptIfChanged(Path.Combine(copyRoot, scriptRelativePath), script);
+
+        // 章節掛勾只改複本裡的那份 YouTube 解析腳本，原安裝目錄不動（指紋也算原安裝目錄，不受影響）
+        TryHookChaptersScript(copyRoot);
 
         try
         {
@@ -142,6 +162,116 @@ public sealed class PotPlayerPreparer(
         }
 
         return Path.Combine(copyRoot, Path.GetFileName(sourceFullPath));
+    }
+
+    /// <summary>把章節掛勾（ChaptersHook.as）接進 <paramref name="potPlayerDir"/> 底下 PotPlayer 內建的
+    /// YouTube 解析腳本（Extension\Media\PlayParse）：說明欄沒有章節時向 Gateway 要從留言整理出的章節。
+    /// <paramref name="loadChaptersHook"/> 為 null 或 <see cref="GatewayEndpoint.ChaptersUrl"/> 為 null 時略過；
+    /// 檔案不存在只記 log；任何失敗只記 Warning，不讓 <see cref="Prepare"/> 失敗。
+    /// 原檔有沒有 UTF-8 BOM，寫回時照舊（PotPlayer 的腳本含日文，BOM 不能掉）。</summary>
+    /// <param name="rethrowAccessDenied">true 時權限被拒（UnauthorizedAccessException）往外拋，讓呼叫端改用複本；其他失敗照樣只記 Warning。</param>
+    private void TryHookChaptersScript(string potPlayerDir, bool rethrowAccessDenied = false)
+    {
+        if (loadChaptersHook is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var chaptersUrl = endpoint.ChaptersUrl;
+            if (chaptersUrl is null)
+            {
+                return;
+            }
+
+            var path = Path.Combine(potPlayerDir, "Extension", "Media", "PlayParse", ChaptersHookBuilder.TargetScriptFileName);
+            if (!File.Exists(path))
+            {
+                logger.LogInformation("找不到 PotPlayer 的 YouTube 解析腳本，略過章節掛勾：{Path}", path);
+                return;
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            var hasBom = bytes is [0xEF, 0xBB, 0xBF, ..];
+            var script = Encoding.UTF8.GetString(hasBom ? bytes[3..] : bytes);
+
+            var hooked = ChaptersHookBuilder.Build(script, loadChaptersHook(), chaptersUrl);
+            if (hooked == script)
+            {
+                return;
+            }
+
+            // 複本是 Gateway 自己的檔案：從安裝目錄複製過來時若帶著唯讀屬性，先拿掉才寫得進去
+            if (!rethrowAccessDenied && File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly))
+            {
+                File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+            }
+
+            File.WriteAllText(path, hooked, new UTF8Encoding(hasBom));
+            logger.LogInformation("已把章節掛勾接進 PotPlayer 的 YouTube 解析腳本：{Path}", path);
+        }
+        catch (UnauthorizedAccessException) when (rethrowAccessDenied)
+        {
+            // 預期中的情況（Program Files 不能寫），只記一行說明、不附例外堆疊，免得看起來像錯誤
+            logger.LogInformation("章節掛勾寫不進 PotPlayer 安裝目錄（權限不足），改用 Gateway 的複本：{Dir}", potPlayerDir);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // IO、權限、簽章對不上等都只記 Warning：掛勾失敗頂多沒有留言章節，播放不受影響
+            logger.LogWarning(ex, "章節掛勾接不進 PotPlayer 的 YouTube 解析腳本，這次沒有留言章節（播放不受影響）");
+        }
+    }
+
+    /// <summary>計算 PotPlayer 安裝目錄的指紋，四行以換行分隔：exe 完整路徑、檔案數、所有檔案大小總和、
+    /// 所有檔案中最新的 LastWriteTimeUtc.Ticks。範圍是 exe 所在目錄底下遞迴的所有檔案（<see cref="EnumerateInstallFiles"/>）。
+    /// 任何檔案拿不到資訊時記 Warning 並回傳 null（呼叫端會視為需要重複製）。</summary>
+    private string? BuildInstallFingerprint(string sourceFullPath)
+    {
+        try
+        {
+            long totalLength = 0;
+            long latestTicks = 0;
+            var count = 0;
+            foreach (var file in EnumerateInstallFiles(Path.GetDirectoryName(sourceFullPath)!))
+            {
+                var info = new FileInfo(file);
+                count++;
+                totalLength += info.Length;
+                latestTicks = Math.Max(latestTicks, info.LastWriteTimeUtc.Ticks);
+            }
+
+            return string.Join(Environment.NewLine, sourceFullPath, count, totalLength, latestTicks);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "計算 PotPlayer 安裝目錄指紋失敗，這次視為需要重新複製：{Source}", sourceFullPath);
+            return null;
+        }
+    }
+
+    /// <summary>列出安裝目錄底下遞迴的所有檔案：排除頂層 Model／Engine（使用者資料，複本裡是目錄連結）
+    /// 與任何 reparse point（目錄連結或符號連結，不跟進去，避免繞到目錄外的資料）。</summary>
+    private static IEnumerable<string> EnumerateInstallFiles(string root)
+    {
+        var pending = new Queue<string>();
+        pending.Enqueue(root);
+        while (pending.Count > 0)
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(pending.Dequeue()))
+            {
+                var attributes = File.GetAttributes(entry);
+                if (!attributes.HasFlag(FileAttributes.Directory))
+                {
+                    yield return entry;
+                }
+                else if (!attributes.HasFlag(FileAttributes.ReparsePoint) && !IsUserDataPath(Path.GetRelativePath(root, entry)))
+                {
+                    pending.Enqueue(entry);
+                }
+            }
+        }
     }
 
     /// <summary>確保複本裡的 Model／Engine 是指向 %APPDATA%\<exe 名稱>\Model（Engine）的目錄連結：

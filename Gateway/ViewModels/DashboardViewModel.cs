@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using Microsoft.Extensions.Logging;
 using System.Collections.ObjectModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
 using Translation.Bridge.Core.Interface;
@@ -55,6 +56,30 @@ public partial class DashboardViewModel : ObservableObject
     private readonly DispatcherTimer _mishearingMiningTimer;
     private readonly DispatcherTimer _mishearingStatusTimer;
 
+    /// <summary>最近推送給 PotPlayer 的字幕行（錄影時找「目前播放到的那一句」用）；null 時不啟用高亮。</summary>
+    private readonly PlaybackLineTracker? _playbackLines;
+
+    /// <summary>播放位置來源（同 PotPlayerSubtitlePusher／CaptionReference 用的時鐘）；null 時不啟用高亮。</summary>
+    private readonly IPlaybackClock? _playbackClock;
+
+    /// <summary>錄影時的「目前播放」高亮計時器；兩個選用參數都有才建立。</summary>
+    private readonly DispatcherTimer? _playingTimer;
+
+    /// <summary>目前高亮（IsPlaying = true）的那一列；沒有高亮時為 null。只在 UI 執行緒存取。</summary>
+    private TranslationJob? _playingJob;
+
+    /// <summary>播放位置查詢進行中：上一次還沒回來就略過這次 tick。只在 UI 執行緒存取。</summary>
+    private bool _playingQueryInFlight;
+
+    /// <summary>章節名稱疊加狀態（錄影開片時載入章節，T-2107 起）：歌曲清單的資料來源；null 時相關功能停用。</summary>
+    private readonly ChapterOverlayState? _chapterOverlay;
+
+    /// <summary>讓播放器跳到指定位置（點歌曲清單的一列用）；null 時點歌不做事。</summary>
+    private readonly IPlaybackSeeker? _playbackSeeker;
+
+    /// <summary>已經因為第一次載到章節而自動切到歌曲清單分頁的影片 Id；換片時因 Id 比對不同自動重置。</summary>
+    private string? _songListAutoSwitchedVideoId;
+
     /// <summary>時間來源（測試可注入可手動推進的 TimeProvider）。</summary>
     private readonly TimeProvider _timeProvider;
 
@@ -96,6 +121,18 @@ public partial class DashboardViewModel : ObservableObject
 
     /// <summary>知識庫模型的健康狀態（可為 null，測試不傳）：直播中故障等恢復時，探勘進度顯示暫停提示。</summary>
     private readonly LlmHealth? _lorebookHealth;
+
+    /// <summary>直播／影片標題翻譯（可為 null，測試不傳）：null 時頁首只顯示原文。</summary>
+    private readonly StreamTitleTranslator? _titleTranslator;
+
+    /// <summary>頁首的預設文字（還沒開台時）。</summary>
+    private const string DefaultHeaderTitle = "字幕監看";
+
+    /// <summary>SetStreamTitle 的遞增版本號：換場後回來的舊翻譯結果靠它丟掉。</summary>
+    private int _titleVersion;
+
+    /// <summary>進行中的標題翻譯的取消令牌；沒有在翻譯時為 null。</summary>
+    private CancellationTokenSource? _titleCts;
 
     /// <summary>詞彙卡型錄（記憶體）：搜尋與組 prompt 段落都用它，不直接查資料庫。</summary>
     private GlossaryCatalog _glossaryCatalog = new([], []);
@@ -147,6 +184,12 @@ public partial class DashboardViewModel : ObservableObject
     /// <summary>最近一次操作的結果（重翻失敗、已複製等），顯示在表格上方狀態列右側</summary>
     [ObservableProperty] private string _actionMessage = string.Empty;
 
+    /// <summary>頁首的大字標題：還沒開台時為「字幕監看」，開台後為直播／影片標題（翻譯完成後換譯文）</summary>
+    [ObservableProperty] private string _headerTitle = DefaultHeaderTitle;
+
+    /// <summary>頁首的小字原文（標題翻譯成功後顯示）；null 時隱藏</summary>
+    [ObservableProperty] private string? _headerSubtitle;
+
     /// <summary>設定檔下拉選單（可直接輸入新名稱）</summary>
     public ObservableCollection<string> ProfileNames { get; } = new();
 
@@ -165,6 +208,36 @@ public partial class DashboardViewModel : ObservableObject
 
     /// <summary>聽錯字探勘狀態膠囊的完整說明：運作方式與最近一次結果</summary>
     [ObservableProperty] private string _mishearingStatusToolTip = string.Empty;
+
+    // ===== 歌曲清單（錄影章節） =====
+
+    /// <summary>歌曲清單：每章一列（中日文、時間範圍），點一下讓 PotPlayer 跳到該時間。</summary>
+    public ObservableCollection<SongListItem> SongList { get; } = [];
+
+    /// <summary>顯示「歌曲清單」分頁：錄影（chapterOverlay.VideoId 有值）而且不是直播時才顯示。</summary>
+    [ObservableProperty] private bool _showSongList;
+
+    /// <summary>直播資訊左欄分頁的索引：0 = 情境、1 = 歌曲清單。</summary>
+    [ObservableProperty] private int _infoTabIndex;
+
+    /// <summary>歌曲清單的來源說明（例：「來源：留言セトリ」）；沒有章節時為貼上セトリ的提示。</summary>
+    [ObservableProperty] private string _songListSourceText = string.Empty;
+
+    /// <summary>歌曲清單的短訊息（貼上結果、跳轉失敗等）；空字串時不顯示。</summary>
+    [ObservableProperty] private string _songListMessage = string.Empty;
+
+    /// <summary>讀剪貼簿的進入點；測試可替換。剪貼簿被占用（COMException）時回傳 null。</summary>
+    public Func<string?> ClipboardReader { get; set; } = () =>
+    {
+        try
+        {
+            return Clipboard.GetText();
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    };
 
     // ===== 詞彙卡 =====
 
@@ -268,7 +341,9 @@ public partial class DashboardViewModel : ObservableObject
         ToastService toasts, StreamSession streamSession,
         ReviewCountSignal reviewSignal,
         ILogger<DashboardViewModel> logger, TimeProvider? timeProvider = null, CaptionTrackState? captions = null,
-        LlmHealth? lorebookHealth = null)
+        LlmHealth? lorebookHealth = null, StreamTitleTranslator? titleTranslator = null,
+        PlaybackLineTracker? playbackLines = null, IPlaybackClock? playbackClock = null,
+        ChapterOverlayState? chapterOverlay = null, IPlaybackSeeker? playbackSeeker = null)
     {
         _settings = settings;
         _manager = manager;
@@ -289,6 +364,7 @@ public partial class DashboardViewModel : ObservableObject
         _timeProvider = timeProvider ?? TimeProvider.System;
         _captions = captions;
         _lorebookHealth = lorebookHealth;
+        _titleTranslator = titleTranslator;
         _lastMishearingMiningAt = _timeProvider.GetUtcNow();
         _lastTermDiscoveryAt = _timeProvider.GetUtcNow();
         _replacementRules = settings.Current.ReplacementRules;
@@ -383,6 +459,307 @@ public partial class DashboardViewModel : ObservableObject
         {
             _lorebookHealth.Changed += OnLorebookHealthChanged;
         }
+
+        // 錄影時的「目前播放」高亮：兩個選用參數都有才每 0.5 秒查一次播放位置
+        _playbackLines = playbackLines;
+        _playbackClock = playbackClock;
+        if (_playbackLines is not null && _playbackClock is not null)
+        {
+            _playingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            _playingTimer.Tick += (_, _) => OnPlayingTimerTick();
+            _playingTimer.Start();
+        }
+
+        // 歌曲清單：章節疊加狀態變動（背景執行緒）時排到 UI 執行緒重建
+        _chapterOverlay = chapterOverlay;
+        _playbackSeeker = playbackSeeker;
+        if (_chapterOverlay is not null)
+        {
+            _chapterOverlay.Changed += OnChapterOverlayChanged;
+            RebuildSongList();
+        }
+    }
+
+    /// <summary>高亮計時器：直播時不查並清掉高亮；上一次查詢還沒回來就略過這次 tick。</summary>
+    private void OnPlayingTimerTick()
+    {
+        if (_playingQueryInFlight)
+        {
+            return;
+        }
+
+        // 直播沒有「推送字幕檔給 PotPlayer」這回事：不查位置，順手清掉舊高亮
+        if (_streamSession.IsLive)
+        {
+            ClearPlayingHighlight();
+            return;
+        }
+
+        _playingQueryInFlight = true;
+        _ = QueryPlayingHighlightAsync();
+    }
+
+    /// <summary>背景查播放位置（GetPositionMs 用 SendMessageTimeout 最多 200ms，不能在 UI 執行緒等），
+    /// 找出位置所在的字幕行與歌曲清單的章節後回 UI 執行緒更新高亮；
+    /// 查詢結束（成功或失敗）都在 UI 執行緒解鎖下一次 tick。</summary>
+    private async Task QueryPlayingHighlightAsync()
+    {
+        string? text = null;
+        long? positionMs = null;
+        var succeeded = false;
+        try
+        {
+            var clock = _playbackClock!;
+            var tracker = _playbackLines!;
+            var position = await Task.Run(clock.GetPositionMs);
+            if (position is { } ms)
+            {
+                positionMs = ms;
+                text = tracker.FindTextAt(ms);
+            }
+            succeeded = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "查詢 PotPlayer 播放位置失敗，略過這次高亮更新");
+        }
+
+        RunOnUi(() =>
+        {
+            if (succeeded)
+            {
+                ApplyPlayingHighlight(text);
+                ApplySongPlayingHighlight(positionMs);
+            }
+
+            _playingQueryInFlight = false;
+        });
+    }
+
+    /// <summary>依播放位置所在的字幕行更新高亮：text 是 null（沒推送過、位置不在任何一行內）時清掉；
+    /// 否則從 <see cref="Jobs"/> 最新往回找第一個原文（CacheKey 或 Current）正規化後相同的列。
+    /// 與目前高亮同一列就不動，否則舊的 IsPlaying = false、新的 IsPlaying = true。</summary>
+    private void ApplyPlayingHighlight(string? text)
+    {
+        TranslationJob? job = null;
+        if (text is not null)
+        {
+            var normalized = PlaybackLineTracker.Normalize(text);
+            job = Jobs.FirstOrDefault(existing =>
+                string.Equals(PlaybackLineTracker.Normalize(existing.CacheKey), normalized, StringComparison.Ordinal) ||
+                string.Equals(PlaybackLineTracker.Normalize(existing.Current), normalized, StringComparison.Ordinal));
+        }
+
+        if (ReferenceEquals(job, _playingJob))
+        {
+            return;
+        }
+
+        if (_playingJob is not null)
+        {
+            _playingJob.IsPlaying = false;
+        }
+
+        _playingJob = job;
+        if (job is not null)
+        {
+            job.IsPlaying = true;
+        }
+    }
+
+    /// <summary>清掉目前的高亮（只動記住的那一列，不掃全部）。</summary>
+    private void ClearPlayingHighlight()
+    {
+        if (_playingJob is null)
+        {
+            return;
+        }
+
+        _playingJob.IsPlaying = false;
+        _playingJob = null;
+    }
+
+    // ===== 歌曲清單（錄影章節） =====
+
+    /// <summary>章節疊加狀態變了（可能在背景執行緒）：排到 UI 執行緒重建歌曲清單。</summary>
+    private void OnChapterOverlayChanged() => RunOnUi(RebuildSongList);
+
+    /// <summary>依目前的章節狀態重建歌曲清單：每章一列，EndMs 同左上角章節名的顯示規則
+    /// （<see cref="CaptionSubtitleBuilder.BuildChapterOverlays"/>：原曲長度＋5 秒收尾、查不到用設定值、不超過下一章開始）。
+    /// 分頁只在錄影（VideoId 有值）而且不是直播時顯示；第一次載到 ≥1 章自動切到歌曲清單分頁（同一支影片只做一次）。</summary>
+    private void RebuildSongList()
+    {
+        ClearManualChaptersCommand.NotifyCanExecuteChanged();
+
+        if (_chapterOverlay is not { } overlay)
+        {
+            return;
+        }
+
+        var items = overlay.Items;
+        var videoId = overlay.VideoId;
+        ShowSongList = videoId is not null && !_streamSession.IsLive;
+        if (!ShowSongList)
+        {
+            InfoTabIndex = 0;
+            SongListSourceText = string.Empty;
+            SongList.Clear();
+            return;
+        }
+
+        SongListSourceText = overlay.Source switch
+        {
+            VideoChapterSources.Manual => "來源：人工貼上",
+            VideoChapterSources.Description => "來源：說明欄",
+            VideoChapterSources.Comment => "來源：留言セトリ",
+            _ => "沒有找到章節，請複製セトリ後按「從剪貼簿貼上」",
+        };
+
+        SongList.Clear();
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var overlays = CaptionSubtitleBuilder.BuildChapterOverlays(
+            items, videoEndMs: 0, fontSize: 12,
+            fallbackDurationMs: _settings.Current.Vod.ChapterTitleFallbackSeconds * 1000L);
+        for (var i = 0; i < overlays.Count; i++)
+        {
+            SongList.Add(new SongListItem
+            {
+                StartMs = overlays[i].StartMs,
+                EndMs = overlays[i].EndMs,
+                Title = items[i].Title,
+                Translation = items[i].Translation,
+            });
+        }
+
+        // 第一次載到 ≥1 章時自動切到歌曲清單分頁；同一支影片只做一次（換片時 Id 比對不同自然重置）
+        if (videoId is not null && !string.Equals(videoId, _songListAutoSwitchedVideoId, StringComparison.Ordinal))
+        {
+            _songListAutoSwitchedVideoId = videoId;
+            InfoTabIndex = 1;
+        }
+    }
+
+    /// <summary>依播放位置標記歌曲清單目前播放的那一章（StartMs ≤ position &lt; EndMs）；
+    /// 位置查不到（null）或不在任何一章內時全部取消；只改有變的列。</summary>
+    private void ApplySongPlayingHighlight(long? positionMs)
+    {
+        if (SongList.Count == 0)
+        {
+            return;
+        }
+
+        SongListItem? playing = null;
+        if (positionMs is { } position)
+        {
+            playing = SongList.FirstOrDefault(item => item.StartMs <= position && position < item.EndMs);
+        }
+
+        foreach (var item in SongList)
+        {
+            if (item.IsPlaying && !ReferenceEquals(item, playing))
+            {
+                item.IsPlaying = false;
+            }
+        }
+
+        if (playing is { IsPlaying: false })
+        {
+            playing.IsPlaying = true;
+        }
+    }
+
+    /// <summary>把剪貼簿的セトリ貼上成人工章節：剪貼簿空白 → 提示；解析成功（≥3 章）→ 套用並提示章節數
+    /// （PotPlayer 進度條的章節要重開影片才會更新）；解析失敗 → 提示找不到時間軸。解析在背景執行緒，不阻塞 UI。</summary>
+    [RelayCommand]
+    private async Task PasteChaptersAsync()
+    {
+        if (_chapterOverlay is not { } overlay)
+        {
+            return;
+        }
+
+        var text = ClipboardReader();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            SongListMessage = "剪貼簿是空的";
+            return;
+        }
+
+        int count;
+        try
+        {
+            count = await Task.Run(async () => await overlay.ApplyManualAsync(text));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "貼上人工章節失敗");
+            SongListMessage = $"貼上失敗：{ex.Message}";
+            return;
+        }
+
+        SongListMessage = count == 0
+            ? "剪貼簿裡找不到 3 行以上、時間遞增的時間軸"
+            : $"已套用 {count} 個章節（人工貼上），PotPlayer 進度條的章節要重開影片才會更新";
+    }
+
+    /// <summary>清除人工章節的條件：章節來源是人工貼上。</summary>
+    private bool CanClearManualChapters() => _chapterOverlay?.Source == VideoChapterSources.Manual;
+
+    /// <summary>刪掉這支影片人工貼上的章節，重新自動抓（說明欄→留言）。清除與重抓在背景執行緒。</summary>
+    [RelayCommand(CanExecute = nameof(CanClearManualChapters))]
+    private async Task ClearManualChaptersAsync()
+    {
+        if (_chapterOverlay is not { } overlay)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.Run(async () => await overlay.ClearManualAsync());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "清除人工章節失敗");
+            SongListMessage = $"清除失敗：{ex.Message}";
+            return;
+        }
+
+        SongListMessage = "已改回自動抓到的章節";
+    }
+
+    /// <summary>點歌曲清單的一列：讓 PotPlayer 跳到該章開始時間（SendMessageTimeout 在背景執行緒送，不卡 UI）。
+    /// 沒有跳轉器（_playbackSeeker 為 null）或送訊息失敗時不跳轉；失敗顯示提示。</summary>
+    [RelayCommand]
+    private void SeekToSong(SongListItem? item)
+    {
+        if (item is null || _playbackSeeker is not { } seeker)
+        {
+            return;
+        }
+
+        var startMs = item.StartMs;
+        _ = Task.Run(() =>
+        {
+            bool succeeded;
+            try
+            {
+                succeeded = seeker.SeekTo(startMs);
+            }
+            catch
+            {
+                succeeded = false;
+            }
+
+            if (!succeeded)
+            {
+                RunOnUi(() => SongListMessage = "PotPlayer 沒有回應，跳轉失敗");
+            }
+        });
     }
 
     /// <summary>知識庫模型健康狀態變了（可能從背景執行緒呼叫）：排到 UI 執行緒更新探勘進度文字。</summary>
@@ -658,10 +1035,87 @@ public partial class DashboardViewModel : ObservableObject
         _activeGlossaryIds.Clear();
         _activeReasons.Clear();
         StreamSituation = string.Empty;
-        // 上一場的探勘結果標籤也一併清掉
+        // 上一場的探勘結果標籤與「目前播放」高亮也一併清掉
         MiningResultTags.Clear();
+        ClearPlayingHighlight();
         ApplyGlossaryChange();
         _logger.LogInformation("開新直播：清空詞彙卡 {Count} 張與情境", count);
+    }
+
+    /// <summary>設定這場直播／影片的標題（一鍵開台時呼叫）：頁首先顯示原文，背景翻譯完成後譯文大字在上、原文小字在下。
+    /// title 空白時回到預設「字幕監看」並取消進行中的翻譯；沒有翻譯器或翻譯失敗時只顯示原文。不寫資料庫。</summary>
+    public void SetStreamTitle(string? title)
+    {
+        _titleVersion++;
+        _titleCts?.Cancel();
+        _titleCts?.Dispose();
+        _titleCts = null;
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            HeaderTitle = DefaultHeaderTitle;
+            HeaderSubtitle = null;
+            return;
+        }
+
+        var original = title.Trim();
+        HeaderTitle = original;
+        HeaderSubtitle = null;
+        if (_titleTranslator is null)
+        {
+            return;
+        }
+
+        var version = _titleVersion;
+        var cts = new CancellationTokenSource();
+        _titleCts = cts;
+        _ = TranslateStreamTitleAsync(original, version, cts.Token);
+    }
+
+    /// <summary>背景翻譯直播標題（不拖慢開台）：成功且仍是同一次 SetStreamTitle 時才更新頁首（排到 UI 執行緒）。</summary>
+    private async Task TranslateStreamTitleAsync(string original, int version, CancellationToken cancellationToken)
+    {
+        string? translated;
+        try
+        {
+            translated = await _titleTranslator!.TranslateAsync(original, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "直播標題翻譯失敗：{Title}", original);
+            return;
+        }
+
+        RunOnUi(() =>
+        {
+            // 換場後回來的舊結果丟掉
+            if (version != _titleVersion)
+            {
+                return;
+            }
+            if (!string.IsNullOrEmpty(translated) && !string.Equals(translated, original, StringComparison.Ordinal))
+            {
+                HeaderTitle = translated;
+                HeaderSubtitle = original;
+            }
+        });
+    }
+
+    /// <summary>把更新排到這個 ViewModel 的 UI 執行緒執行（背景翻譯的結果回來用）；已在 UI 執行緒時直接執行。
+    /// 用建立 ViewModel 時的 Dispatcher（同 DispatcherTimer），不用 Application.Current：測試行程裡 Application 可能建在別的執行緒。</summary>
+    private void RunOnUi(Action action)
+    {
+        var dispatcher = _statsTimer.Dispatcher;
+        if (dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+        dispatcher.BeginInvoke(action);
     }
 
     [RelayCommand]

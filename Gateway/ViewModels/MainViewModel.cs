@@ -2,6 +2,7 @@
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -79,6 +80,12 @@ public partial class MainViewModel : ObservableObject
     /// <summary>一鍵開台的進度／結果訊息</summary>
     [ObservableProperty] private string _streamStatus = string.Empty;
 
+    /// <summary>開台失敗缺套件（streamlink／PotPlayer）時的下載頁網址；有值時狀態列下方顯示「前往下載」按鈕。</summary>
+    [ObservableProperty] private string? streamHelpUrl;
+
+    /// <summary>「前往下載」按鈕的文字（例如「前往下載 streamlink」）；沒有 HelpUrl 時為 null。</summary>
+    [ObservableProperty] private string? streamHelpLabel;
+
     /// <summary>翻譯模型的開台資料探勘等待中（只設定翻譯模型、缺卡需要探勘時）：側邊欄顯示「中斷探勘，直接播放」按鈕。</summary>
     [ObservableProperty] private bool isWaitingForStreamMining;
 
@@ -109,6 +116,10 @@ public partial class MainViewModel : ObservableObject
     /// <summary>情境存檔詢問對話框的進入點（與 <see cref="ConfirmDialog"/> 分開，方便測試各自計數）；測試可替換。回傳 true 表示「是」。</summary>
     public Func<string, bool> SaveSituationDialog { get; set; } = message =>
         MessageBox.Show(message, "情境存檔", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+
+    /// <summary>狀態列「前往下載」按鈕開網址的進入點；測試可替換。</summary>
+    public Action<string> OpenUrl { get; set; } = url =>
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
 
     /// <summary>上一場成功開台的頻道名稱；開新直播時當作情境存檔詢問的預設設定檔名稱。</summary>
     private string? _lastStreamChannel;
@@ -369,6 +380,9 @@ public partial class MainViewModel : ObservableObject
     private async Task OpenStreamAsync()
     {
         StreamStatus = "開啟中…";
+        // 上一次失敗的「前往下載」按鈕先收掉，等這次結果再決定要不要顯示
+        StreamHelpUrl = null;
+        StreamHelpLabel = null;
         // 關上詞彙卡準備門：等套用詞彙卡與（需要時的）開台資料探勘生效，前處理與預先翻譯才開始
         _cardGate.Begin();
         _streamOpenNotes.Clear();
@@ -459,6 +473,8 @@ public partial class MainViewModel : ObservableObject
             }
 
             StreamStatus = ComposeStreamStatus(result.Message);
+            StreamHelpUrl = result.HelpUrl;
+            StreamHelpLabel = result.HelpLabel;
 
             if (!result.Success) return;
         }
@@ -555,9 +571,10 @@ public partial class MainViewModel : ObservableObject
 
         // 換直播後舊字幕一律不能再用：清空字幕狀態，並讓進行中的下載作廢（結果被丟掉）
         _captionLoader.Reset();
+        string? captionVideoId = null;
         if (metadata is { Platform: StreamPlatform.YouTube, IsVod: true })
         {
-            var captionVideoId = !string.IsNullOrWhiteSpace(metadata.Id)
+            captionVideoId = !string.IsNullOrWhiteSpace(metadata.Id)
                 ? metadata.Id
                 : YouTubeVideoId.TryParse(url);
             if (captionVideoId is not null)
@@ -565,6 +582,18 @@ public partial class MainViewModel : ObservableObject
                 // 不 await：開台流程不能等字幕下載
                 _ = _captionLoader.LoadAsync(captionVideoId, url);
             }
+        }
+
+        // 章節名稱疊加：YouTube 錄影才在背景載入章節（說明欄優先，沒有才用留言セトリ）；
+        // 不 await，開台流程不能被章節下載或標題翻譯拖住。直播、Twitch 或解析不到 videoId 時清掉上一支影片的章節
+        var chapterOverlay = _serviceProvider.GetRequiredService<ChapterOverlayState>();
+        if (metadata is { Platform: StreamPlatform.YouTube, IsVod: true } && captionVideoId is not null)
+        {
+            _ = chapterOverlay.LoadAsync(captionVideoId, metadata.Description);
+        }
+        else
+        {
+            chapterOverlay.Reset();
         }
 
         // 先清掉目前直播：舊直播的詞彙卡紀錄不會被這次的自動套用或之後的手動變更影響；
@@ -606,6 +635,9 @@ public partial class MainViewModel : ObservableObject
         {
             _streamOpenNotes.Add($"已套用詞彙卡：{string.Join("、", appliedNames)}");
         }
+
+        // 這場的標題：頁首先顯示原文，背景翻譯（在套用詞彙卡之後，標題翻譯的 prompt 才用得到這場的名詞）
+        dashboard.SetStreamTitle(metadata?.Title);
 
         // 還缺哪種卡（主播角色卡、遊戲直播的作品卡）：缺卡就開台自動資料探勘
         // （探勘會跳過已經有卡的名詞，不會重複建主播卡）
@@ -711,6 +743,16 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void SkipStreamMining() =>
         _ = _serviceProvider.GetRequiredService<DashboardViewModel>().CancelMiningAsync();
+
+    /// <summary>狀態列的「前往下載」按鈕：開啟這次開台失敗原因（缺 streamlink／PotPlayer）的下載頁。</summary>
+    [RelayCommand]
+    private void OpenStreamHelp()
+    {
+        if (StreamHelpUrl is { } url)
+        {
+            OpenUrl(url);
+        }
+    }
 
     /// <summary>開台資料探勘跑完（成功或失敗）後打開詞彙卡準備門：前處理與預先翻譯的 prompt 這時才開始組。
     /// 例外已在 Dashboard 內處理，這裡只要確保門一定會開。</summary>

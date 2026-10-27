@@ -326,6 +326,16 @@ public class UiSmokeTests
             window.UpdateLayout();
             Assert.NotNull(FindAllVisual<FrameworkElement>(window).Single(e => e.Name == "GlossaryPanel"));
 
+            // ===== 直播資訊左欄改分頁［情境｜歌曲清單］：沒有錄影時歌曲清單分頁收合，看起來跟原本一樣 =====
+            var infoTabs = Assert.Single(FindAllVisual<TabControl>(window));
+            Assert.Equal(2, infoTabs.Items.Count);
+            Assert.Equal(0, vm.InfoTabIndex);
+            Assert.False(vm.ShowSongList);
+            var songTab = Assert.IsType<TabItem>(infoTabs.Items[1]);
+            Assert.Equal(Visibility.Collapsed, songTab.Visibility);
+            var situationTab = Assert.IsType<TabItem>(infoTabs.Items[0]);
+            Assert.Equal("情境", situationTab.Header);
+
             // ===== 詞彙卡抽屜：點卡開右側抽屜編輯名詞，存檔寫回資料庫並更新 prompt =====
             vm.GlossarySearchText = "暴徒";
             DoEvents();
@@ -508,11 +518,13 @@ public class UiSmokeTests
             Assert.Empty(confirmMessages); // 沒有網址時不詢問
             Assert.Empty(saveSituationMessages);
 
-            // 開台失敗（找不到 streamlink）：全新的網址會先詢問情境存檔，但失敗時不清情境也不清卡
+            // 開台失敗（找不到 PotPlayer 或 streamlink，看驗證機有沒有裝；T-2111 起 PotPlayer 先檢查、streamlink 只在直播路徑檢查）：
+            // 全新的網址會先詢問情境存檔，但失敗時不清情境也不清卡；狀態列下方有「前往下載」
             mainVm.ClipboardReader = () => "https://www.twitch.tv/someone";
             mainVm.OpenStreamCommand.Execute(null);
             DoEvents();
-            Assert.Contains("找不到 streamlink", mainVm.StreamStatus);
+            Assert.Matches("找不到 (PotPlayer|streamlink)", mainVm.StreamStatus);
+            Assert.NotNull(mainVm.StreamHelpUrl);
             Assert.Empty(confirmMessages);
             // 情境（今天玩 ほの暮しの庭）與套用中設定檔「情境測試」的內容不同 → 詢問一次，訊息含設定檔名稱
             var failSaveMessage = Assert.Single(saveSituationMessages);
@@ -671,6 +683,8 @@ public class UiSmokeTests
             Assert.Contains(FindAllVisual<GroupBox>(settingsView), g => string.Equals(g.Header as string, "預先翻譯"));
             Assert.Contains(FindAllVisual<GroupBox>(settingsView), g => string.Equals(g.Header as string, "開片"));
             Assert.Contains(FindAllVisual<GroupBox>(settingsView), g => string.Equals(g.Header as string, "排程"));
+            // 章節名稱新增「查不到原曲長度時顯示 (秒)」欄位（綁 ChapterTitleFallbackSeconds）
+            Assert.Contains(FindAllVisual<TextBlock>(settingsView), t => t.Text == "查不到原曲長度時顯示 (秒)");
 
             // 第五頁（資料庫）：區塊載入、顯示目前使用中的後端，測試暫存 SQLite 連線成功
             tabs.SelectedIndex = 4;
@@ -1016,6 +1030,13 @@ public class UiSmokeTests
                 ]));
     }
 
+    /// <summary>不連網的假熱門留言查詢：固定回 null（查不到留言），章節來源只會用說明欄。</summary>
+    private sealed class StubCommentProvider : IYouTubeCommentProvider
+    {
+        public Task<IReadOnlyList<YouTubeComment>?> GetTopCommentsAsync(string videoId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<YouTubeComment>?>(null);
+    }
+
     /// <summary>不連網的知識庫模型替身：測試連線一律成功；CompleteJson 依序回傳排入的腳本 JSON（沒有排入時回傳空物件）。</summary>
     private sealed class StubLorebookLlm : ILorebookLlm
     {
@@ -1071,7 +1092,9 @@ public class UiSmokeTests
 
     private static ServiceProvider BuildServices(SettingsService settings, SqliteTranslationStore db, IProcessRunner processRunner,
         StubLorebookLlm? lorebookLlm = null, StubKnowledgeSources? knowledgeSources = null,
-        StubPotPlayerProcesses? potPlayerProcesses = null)
+        StubPotPlayerProcesses? potPlayerProcesses = null, StreamTitleTranslator? titleTranslator = null,
+        PlaybackLineTracker? playbackTracker = null, IPlaybackClock? playbackClock = null,
+        IPlaybackSeeker? playbackSeeker = null)
     {
         lorebookLlm ??= new StubLorebookLlm();
         knowledgeSources ??= new StubKnowledgeSources();
@@ -1101,6 +1124,11 @@ public class UiSmokeTests
         services.AddSingleton<IYouTubeCaptionProvider>(new StubCaptionProvider());
         // YouTube 字幕下載（開台與 PotPlayer 腳本通知共用）：MainViewModel 依賴它（pageInfo 沒註冊，用預設 null）
         services.AddSingleton<CaptionLoader>();
+        // 章節名稱疊加：MainViewModel 開片時解析 ChapterOverlayState（假的留言查詢不連網，查不到章節）
+        services.AddSingleton<IYouTubeCommentProvider>(new StubCommentProvider());
+        services.AddSingleton<VideoChapterService>();
+        services.AddSingleton<ChapterTitleTranslator>();
+        services.AddSingleton<ChapterOverlayState>();
         // 生成式字幕前處理：MainViewModel 依賴 CaptionPreprocessor（假的播放時鐘已註冊，不會真的找 PotPlayer）
         services.AddSingleton<CaptionSentenceState>();
         // 錄影開片的詞彙卡準備門：CaptionPreprocessor、VodPrefetcher、MainViewModel 共用（開台時開關）
@@ -1110,6 +1138,21 @@ public class UiSmokeTests
         services.AddSingleton<IPotPlayerSubtitleLoader>(new StubPotPlayerSubtitleLoader());
         // YouTube 字幕參考：假的播放時鐘固定回 null（不真的去找 PotPlayer 行程）
         services.AddSingleton<IPlaybackClock>(new NullPlaybackClock());
+        // 錄影「目前播放」高亮：有傳才註冊（播放時鐘換成可控制的假時鐘；後註冊的優先）
+        if (playbackTracker is not null)
+        {
+            services.AddSingleton(playbackTracker);
+        }
+
+        if (playbackClock is not null)
+        {
+            services.AddSingleton<IPlaybackClock>(playbackClock);
+        }
+        // 歌曲清單點歌跳轉：有傳才註冊（沒傳時 DashboardViewModel 的選用參數是 null，點歌不做事）
+        if (playbackSeeker is not null)
+        {
+            services.AddSingleton<IPlaybackSeeker>(playbackSeeker);
+        }
         services.AddSingleton<CaptionReference>();
         // 開台前詢問關閉 PotPlayer 用：假的程序清單（不掃描、不啟動或結束任何程式）
         services.AddSingleton<IPotPlayerProcesses>(potPlayerProcesses);
@@ -1139,6 +1182,11 @@ public class UiSmokeTests
         // 聽錯字探勘的時間來源：可手動推進，測試不必真的等 5 分鐘
         services.AddSingleton(fakeTime);
         services.AddSingleton<TimeProvider>(fakeTime);
+        // 直播標題翻譯（Dashboard 頁首）：有傳才註冊（沒傳時 DashboardViewModel 的選用參數是 null，頁首只顯示原文）
+        if (titleTranslator is not null)
+        {
+            services.AddSingleton(titleTranslator);
+        }
         services.AddSingleton<DashboardViewModel>();
         services.AddSingleton<GlossaryReviewViewModel>();
         services.AddSingleton<MishearingReviewViewModel>();
@@ -1294,7 +1342,10 @@ public class UiSmokeTests
     }
 
     private static DashboardContext CreateDashboardContext(
-        Action<SqliteConnection> seed, Action<AppSettings>? configureSettings = null)
+        Action<SqliteConnection> seed, Action<AppSettings>? configureSettings = null,
+        ILorebookLlm? titleLlm = null,
+        PlaybackLineTracker? playbackTracker = null, IPlaybackClock? playbackClock = null,
+        IPlaybackSeeker? playbackSeeker = null)
     {
         var dir = Directory.CreateTempSubdirectory("gateway-dashboard-");
         var dbPath = Path.Combine(dir.FullName, "cache.db");
@@ -1307,7 +1358,11 @@ public class UiSmokeTests
         var settings = new SettingsService(
             NullLogger<SettingsService>.Instance, Path.Combine(dir.FullName, "settings.json"));
         configureSettings?.Invoke(settings.Current);
-        var provider = BuildServices(settings, db, new FakeProcessRunner());
+        // 標題翻譯用獨立的假模型（可控制完成時機）：與探勘用的 StubLorebookLlm 分開，才不會吃掉探勘的腳本回覆
+        StreamTitleTranslator? titleTranslator = titleLlm is null ? null : new StreamTitleTranslator(
+            titleLlm, new GlossaryState(), new TextProcessingService(), NullLogger<StreamTitleTranslator>.Instance);
+        var provider = BuildServices(settings, db, new FakeProcessRunner(), titleTranslator: titleTranslator,
+            playbackTracker: playbackTracker, playbackClock: playbackClock, playbackSeeker: playbackSeeker);
         return new DashboardContext { Dir = dir.FullName, Settings = settings, Provider = provider };
     }
 
@@ -1443,5 +1498,394 @@ public class UiSmokeTests
 
         // 展開狀態與直播資訊內容無關：切換時不走 OnStreamInfoChanged（StreamInfoUpdatedAt 維持 null，代表沒有預熱）
         Assert.Null(ctx.Settings.Current.StreamInfoUpdatedAt);
+    }
+
+    [Fact]
+    public void SetStreamTitle_ShowsOriginalThenTranslation()
+    {
+        var llm = new GatedTitleLlm();
+        using var ctx = CreateDashboardContext(_ => { }, titleLlm: llm);
+        var vm = ctx.Dashboard;
+
+        // 預設頁首
+        Assert.Equal("字幕監看", vm.HeaderTitle);
+        Assert.Null(vm.HeaderSubtitle);
+
+        // 開台後先顯示原文
+        vm.SetStreamTitle("【APEX】雑談配信");
+        Assert.Equal("【APEX】雑談配信", vm.HeaderTitle);
+        Assert.Null(vm.HeaderSubtitle);
+
+        // 翻譯完成：譯文大字在上、原文小字在下
+        llm.Complete(0, """{"translation": "【APEX】雜談直播"}""");
+        PumpUntil(() => vm.HeaderTitle == "【APEX】雜談直播");
+        Assert.Equal("【APEX】雑談配信", vm.HeaderSubtitle);
+
+        // title 空白：回到預設
+        vm.SetStreamTitle(" ");
+        Assert.Equal("字幕監看", vm.HeaderTitle);
+        Assert.Null(vm.HeaderSubtitle);
+    }
+
+    [Fact]
+    public void SetStreamTitle_StaleResultIgnored()
+    {
+        var llm = new GatedTitleLlm();
+        using var ctx = CreateDashboardContext(_ => { }, titleLlm: llm);
+        var vm = ctx.Dashboard;
+
+        // 第一場開台後馬上換場：舊的翻譯還在跑（假模型故意不吃取消，模擬模型慢慢回、被取代後仍送達）
+        vm.SetStreamTitle("第一場標題");
+        Assert.Equal(1, llm.CallCount);
+        vm.SetStreamTitle("第二場標題");
+        Assert.Equal(2, llm.CallCount);
+        Assert.Equal("第二場標題", vm.HeaderTitle);
+        Assert.Null(vm.HeaderSubtitle);
+
+        // 舊的翻譯這時才回來：換場後的舊結果丟掉，頁首維持第二場的原文
+        llm.Complete(0, """{"translation": "第一場譯文"}""");
+        Thread.Sleep(200);
+        Assert.Equal("第二場標題", vm.HeaderTitle);
+        Assert.Null(vm.HeaderSubtitle);
+
+        // 第二場的翻譯回來：正常更新
+        llm.Complete(1, """{"translation": "第二場譯文"}""");
+        PumpUntil(() => vm.HeaderTitle == "第二場譯文");
+        Assert.Equal("第二場標題", vm.HeaderSubtitle);
+    }
+
+    // 錄影「目前播放」高亮：推送字幕行＋播放位置對上某句 → 該列 IsPlaying；換位置後舊列變 false、新列變 true；
+    // 位置超過所有行之後高亮清掉。計時器（0.5 秒）走真實時間，用 PumpUntil 打氣 Dispatcher 等 tick。
+    [Fact]
+    public void PlayingHighlight_FollowsPlaybackPosition_AndClearsOutsideLines()
+    {
+        RunOnSta(() =>
+        {
+            // 與其他情境一樣裝 Dispatcher 同步內容，查詢的接續才會留在這條 UI 執行緒
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+
+            using var playback = new PlaybackPushHarness();
+            var clock = new ScriptedPlaybackClock { Position = 1500 };
+            using var ctx = CreateDashboardContext(_ => { }, playbackTracker: playback.Tracker, playbackClock: clock);
+            var vm = ctx.Dashboard;
+            var jobA = NewPlayingJob("おはよう。");
+            var jobB = NewPlayingJob("こんにちは。");
+            vm.Jobs.Insert(0, jobB);
+            vm.Jobs.Insert(0, jobA);
+
+            // 兩句各佔 [1000,3000) 與 [3000,5000)（句子蓋住 StubCaptionProvider 的三段 cue）
+            playback.Push(
+                NewSentence(1000, 3000, "おはよう。"),
+                NewSentence(3000, 5000, "こんにちは。"));
+
+            // 位置 1500 → 第一列高亮
+            PumpUntil(() => jobA.IsPlaying);
+            Assert.False(jobB.IsPlaying);
+
+            // 位置 4000 → 換第二列，第一列取消
+            clock.Position = 4000;
+            PumpUntil(() => jobB.IsPlaying);
+            Assert.False(jobA.IsPlaying);
+
+            // 位置 9000（超過所有行）→ 高亮清掉
+            clock.Position = 9000;
+            PumpUntil(() => !jobB.IsPlaying);
+            Assert.False(jobA.IsPlaying);
+        });
+    }
+
+    private static TranslationJob NewPlayingJob(string text) => new()
+    {
+        Current = text,
+        CacheKey = text,
+        TranslatedText = "譯文",
+    };
+
+    private static CaptionSentence NewSentence(long startMs, long endMs, string text) =>
+        new(startMs, endMs, text, text, "m");
+
+    /// <summary>可控制播放位置的假時鐘（錄影「目前播放」高亮用）。</summary>
+    private sealed class ScriptedPlaybackClock : IPlaybackClock
+    {
+        public long? Position { get; set; }
+
+        public long? GetPositionMs() => Position;
+    }
+
+    /// <summary>可控制結果的假跳轉器（歌曲清單點歌用）：記下每次收到的毫秒數。</summary>
+    private sealed class StubPlaybackSeeker : IPlaybackSeeker
+    {
+        public List<long> Requests { get; } = [];
+
+        public bool Result { get; set; } = true;
+
+        public bool SeekTo(long positionMs)
+        {
+            Requests.Add(positionMs);
+            return Result;
+        }
+    }
+
+    // ===== 歌曲清單（直播資訊左欄分頁）=====
+
+    /// <summary>同步等 Task 完成（歌曲清單測試用；集中在非測試方法裡，避免 xUnit1031 的封鎖呼叫警告）。</summary>
+    private static void WaitFor(Task task) => task.GetAwaiter().GetResult();
+
+    /// <summary>同步等 Task&lt;T&gt; 完成（歌曲清單測試用；集中在非測試方法裡，避免 xUnit1031 的封鎖呼叫警告）。</summary>
+    private static T WaitFor<T>(Task<T> task) => task.GetAwaiter().GetResult();
+
+    /// <summary>錄影開片後歌曲清單從 ChapterOverlayState 重建（真的狀態＋假的留言／模型）：
+    /// 數量、時間範圍（同左上角章節名的結束規則）、來源文字與第一次自動切分頁；同一支影片只自動切一次。</summary>
+    [Fact]
+    public void SongList_BuildsFromChapterOverlay_AndAutoSwitchesOncePerVideo()
+    {
+        using var ctx = CreateDashboardContext(_ => { });
+        var vm = ctx.Dashboard;
+        var overlay = ctx.Provider.GetRequiredService<ChapterOverlayState>();
+
+        // 尚未開片：分頁不顯示、清單空、停在情境分頁
+        Assert.False(vm.ShowSongList);
+        Assert.Equal(0, vm.InfoTabIndex);
+        Assert.Empty(vm.SongList);
+
+        // 錄影開片：說明欄有 3 個章節 → Changed 重建清單、顯示分頁、第一次載到章節自動切到歌曲清單分頁
+        WaitFor(overlay.LoadAsync("dQw4w9WgXcQ", "0:00 オープニング\n8:35 一番好きな歌\n12:58 雑談", CancellationToken.None));
+        PumpUntil(() => vm.SongList.Count == 3);
+
+        Assert.True(vm.ShowSongList);
+        Assert.Equal(1, vm.InfoTabIndex);
+        Assert.Equal("來源：說明欄", vm.SongListSourceText);
+        Assert.Equal("オープニング", vm.SongList[0].Title);
+        // EndMs 同左上角章節名的規則：查不到原曲長度顯示 300 秒（預設）、不超過下一章開始；最後一章（videoEndMs=0）用 +60 秒
+        Assert.Equal(0, vm.SongList[0].StartMs);
+        Assert.Equal(300000, vm.SongList[0].EndMs);
+        Assert.Equal("00:00–05:00", vm.SongList[0].TimeRangeText);
+        Assert.Equal("08:35–12:58", vm.SongList[1].TimeRangeText);
+        Assert.Equal("12:58–13:58", vm.SongList[2].TimeRangeText);
+        // 假 GLM 的預設回覆（{"ok": true}）翻不了標題 → 譯文維持 null
+        Assert.Null(vm.SongList[1].Translation);
+
+        // 使用者切回情境分頁後，後續的 Changed（人工貼上等）不得再自動切過去：同一支影片只做一次
+        vm.InfoTabIndex = 0;
+        WaitFor(overlay.ApplyManualAsync("0:00 ねんね\n3:00 うた\n6:00 おわり", CancellationToken.None));
+        PumpUntil(() => vm.SongList.Count == 3 && vm.SongList[2].StartMs == 360000);
+        Assert.Equal(0, vm.InfoTabIndex);
+        Assert.Equal("來源：人工貼上", vm.SongListSourceText);
+    }
+
+    /// <summary>直播（StreamSession.IsLive）時不顯示歌曲清單分頁：ShowSongList false、分頁索引回到情境、清單清空。</summary>
+    [Fact]
+    public void SongList_LiveStream_HidesSongTab()
+    {
+        using var ctx = CreateDashboardContext(_ => { });
+        var vm = ctx.Dashboard;
+        var overlay = ctx.Provider.GetRequiredService<ChapterOverlayState>();
+        ctx.Provider.GetRequiredService<StreamSession>().IsLive = true;
+        vm.InfoTabIndex = 1; // 假設使用者上次停在歌曲清單分頁
+
+        WaitFor(overlay.LoadAsync("dQw4w9WgXcQ", "0:00 A\n8:35 B\n12:58 C", CancellationToken.None));
+
+        Assert.False(vm.ShowSongList);
+        Assert.Equal(0, vm.InfoTabIndex);
+        Assert.Empty(vm.SongList);
+        Assert.Equal(string.Empty, vm.SongListSourceText);
+    }
+
+    /// <summary>從剪貼簿貼上セトリ：空白／不合格的對應訊息；合格的三行時間軸套用成功、來源變人工、
+    /// 「清除人工章節」變可用；清除後改回自動抓到的章節。</summary>
+    [Fact]
+    public void PasteChapters_MessagesForEmptyInvalidAndValidText()
+    {
+        using var ctx = CreateDashboardContext(_ => { });
+        var vm = ctx.Dashboard;
+        var overlay = ctx.Provider.GetRequiredService<ChapterOverlayState>();
+
+        // 先開片（人工貼上需要有影片）；說明欄與留言都沒有章節 → 顯示貼上提示
+        WaitFor(overlay.LoadAsync("dQw4w9WgXcQ", "只是說明", CancellationToken.None));
+        PumpUntil(() => vm.ShowSongList && vm.SongList.Count == 0);
+        Assert.Equal("沒有找到章節，請複製セトリ後按「從剪貼簿貼上」", vm.SongListSourceText);
+        Assert.False(vm.ClearManualChaptersCommand.CanExecute(null));
+
+        // 剪貼簿空白
+        vm.ClipboardReader = () => "   ";
+        WaitFor(vm.PasteChaptersCommand.ExecuteAsync(null));
+        Assert.Equal("剪貼簿是空的", vm.SongListMessage);
+
+        // 不合格（沒有時間軸）
+        vm.ClipboardReader = () => "今天唱了很多歌";
+        WaitFor(vm.PasteChaptersCommand.ExecuteAsync(null));
+        Assert.Equal("剪貼簿裡找不到 3 行以上、時間遞增的時間軸", vm.SongListMessage);
+        Assert.Empty(vm.SongList);
+
+        // 合格的三行時間軸 → 套用成功、清單重建、來源變人工
+        vm.ClipboardReader = () => "0:00 ねんね\n3:00 うた\n6:00 おわり";
+        WaitFor(vm.PasteChaptersCommand.ExecuteAsync(null));
+        Assert.Equal("已套用 3 個章節（人工貼上），PotPlayer 進度條的章節要重開影片才會更新", vm.SongListMessage);
+        PumpUntil(() => vm.SongList.Count == 3);
+        Assert.Equal("來源：人工貼上", vm.SongListSourceText);
+        Assert.True(vm.ClearManualChaptersCommand.CanExecute(null));
+
+        // 清除人工章節 → 改回自動抓到的（說明欄沒有 → 回到貼上提示）
+        WaitFor(vm.ClearManualChaptersCommand.ExecuteAsync(null));
+        Assert.Equal("已改回自動抓到的章節", vm.SongListMessage);
+        PumpUntil(() => vm.SongList.Count == 0);
+        Assert.Equal("沒有找到章節，請複製セトリ後按「從剪貼簿貼上」", vm.SongListSourceText);
+        Assert.False(vm.ClearManualChaptersCommand.CanExecute(null));
+    }
+
+    /// <summary>點歌曲讓 PotPlayer 跳轉：跳轉器收到該章的開始毫秒；失敗時顯示提示（訊息在 UI 執行緒更新）。</summary>
+    [Fact]
+    public void SeekToSong_SendsStartMs_AndShowsFailureWhenSeekerFails()
+    {
+        var seeker = new StubPlaybackSeeker();
+        using var ctx = CreateDashboardContext(_ => { }, playbackSeeker: seeker);
+        var vm = ctx.Dashboard;
+        var song = new SongListItem { StartMs = 515000, EndMs = 778000, Title = "一番好きな歌" };
+
+        // 成功：收到該章的開始毫秒，沒有失敗訊息
+        vm.SeekToSongCommand.Execute(song);
+        PumpUntil(() => seeker.Requests.Count == 1);
+        Assert.Equal(515000, seeker.Requests[0]);
+        Assert.Equal(string.Empty, vm.SongListMessage);
+
+        // 失敗：顯示提示
+        seeker.Result = false;
+        vm.SeekToSongCommand.Execute(song);
+        PumpUntil(() => vm.SongListMessage == "PotPlayer 沒有回應，跳轉失敗");
+        Assert.Equal(2, seeker.Requests.Count);
+
+        // 沒有跳轉器時（DI 未注入）不做事：這裡用 null 參數的 ViewModel 驗證（另建一個 context 太重，
+        // 直接確認命令丟 null 參數也不做事）
+        vm.SeekToSongCommand.Execute(null);
+        Assert.Equal(2, seeker.Requests.Count);
+    }
+
+    /// <summary>歌曲清單的「目前播放」高亮沿用 500ms 計時器：位置在某一章範圍內 → 該列 IsPlaying；
+    /// 換位置後舊列取消、新列亮起；位置超出所有章節後全部取消。</summary>
+    [Fact]
+    public void SongPlayingHighlight_FollowsPlaybackPosition()
+    {
+        RunOnSta(() =>
+        {
+            // 與其他情境一樣裝 Dispatcher 同步內容，查詢的接續才會留在這條 UI 執行緒
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+
+            using var playback = new PlaybackPushHarness();
+            var clock = new ScriptedPlaybackClock { Position = 200000 };
+            using var ctx = CreateDashboardContext(_ => { }, playbackTracker: playback.Tracker, playbackClock: clock);
+            var vm = ctx.Dashboard;
+            WaitFor(ctx.Provider.GetRequiredService<ChapterOverlayState>()
+                .LoadAsync("dQw4w9WgXcQ", "0:00 オープニング\n8:35 一番好きな歌\n12:58 雑談", CancellationToken.None));
+            PumpUntil(() => vm.SongList.Count == 3);
+
+            // 位置 200000 在第一章 [0,300000) 內 → 第一首高亮
+            PumpUntil(() => vm.SongList[0].IsPlaying);
+            Assert.False(vm.SongList[1].IsPlaying);
+
+            // 位置 600000 在第二章 [515000,778000) 內 → 換第二首，第一首取消
+            clock.Position = 600000;
+            PumpUntil(() => vm.SongList[1].IsPlaying);
+            Assert.False(vm.SongList[0].IsPlaying);
+
+            // 位置 900000 超過所有章節 → 高亮清掉
+            clock.Position = 900000;
+            PumpUntil(() => !vm.SongList[1].IsPlaying);
+            Assert.False(vm.SongList[0].IsPlaying);
+            Assert.False(vm.SongList[2].IsPlaying);
+        });
+    }
+
+    /// <summary>錄影「目前播放」高亮的測試內容：自己的字幕狀態與推送器（沿用 PotPlayerSubtitlePusherTests 的做法，
+    /// 假的 PotPlayer 載入器一律成功才推得出去），Pushed 事件由 CaptionSentenceState 的變動經真的推送觸發。</summary>
+    private sealed class PlaybackPushHarness : IDisposable
+    {
+        private const string VideoId = "dQw4w9WgXcQ";
+
+        public DirectoryInfo Dir { get; } = Directory.CreateTempSubdirectory("gateway-playing-");
+
+        public CaptionSentenceState Sentences { get; } = new();
+
+        public CaptionTrackState Captions { get; } = new();
+
+        public CaptionLoader Loader { get; }
+
+        public PotPlayerSubtitlePusher Pusher { get; }
+
+        public PlaybackLineTracker Tracker { get; }
+
+        public PlaybackPushHarness()
+        {
+            Loader = new CaptionLoader(Captions, new StubCaptionProvider());
+            Pusher = new PotPlayerSubtitlePusher(
+                Sentences, Captions, Loader, new AcceptingLoader(), () => true, Dir.FullName,
+                NullLogger<PotPlayerSubtitlePusher>.Instance)
+            {
+                Debounce = TimeSpan.FromMilliseconds(50),
+            };
+            Tracker = new PlaybackLineTracker(Pusher);
+        }
+
+        /// <summary>載入影片後推送句子，等到 Pushed 真的帶著這批句子觸發（比對 tracker 內容，不是只看推送次數）。</summary>
+        public void Push(params CaptionSentence[] sentences)
+        {
+            Loader.LoadAsync(VideoId, null).GetAwaiter().GetResult();
+            var last = sentences[^1];
+            var expected = CaptionSubtitleBuilder.CueText(last.Text);
+            Sentences.Reset(VideoId, 1);
+            Sentences.Add(VideoId, sentences);
+            PumpUntil(() => Tracker.FindTextAt(last.StartMs) == expected);
+        }
+
+        public void Dispose()
+        {
+            Tracker.Dispose();
+            Pusher.Dispose();
+            try { Dir.Delete(recursive: true); } catch (IOException) { /* 寫入中的檔案留給系統清 */ }
+        }
+
+        /// <summary>一律成功的假 PotPlayer 字幕載入器（推送才會成立、Pushed 才會觸發）。</summary>
+        private sealed class AcceptingLoader : IPotPlayerSubtitleLoader
+        {
+            public bool Load(string subtitlePath) => true;
+        }
+    }
+
+    /// <summary>可控制完成時機的標題翻譯假模型：每次呼叫配一個新的閘門（Complete(index, content) 才回覆）。
+    /// 故意不收 CancellationToken——模擬模型慢慢回、被換場取代後舊結果仍送達。</summary>
+    private sealed class GatedTitleLlm : ILorebookLlm
+    {
+        private readonly object _lock = new();
+        private readonly List<TaskCompletionSource<string>> _gates = [];
+
+        /// <summary>收到的 user 訊息（驗證送出的是標題原文）。</summary>
+        public List<string> UserPrompts { get; } = [];
+
+        public int CallCount
+        {
+            get { lock (_lock) return _gates.Count; }
+        }
+
+        public async Task<LlmJsonResult> CompleteJsonAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+        {
+            TaskCompletionSource<string> gate;
+            lock (_lock)
+            {
+                gate = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _gates.Add(gate);
+            }
+            UserPrompts.Add(userPrompt);
+            var reply = await gate.Task.ConfigureAwait(false);
+            return new LlmJsonResult(reply, 1, 1, 1, "stub-title");
+        }
+
+        public void Complete(int index, string content)
+        {
+            lock (_lock) _gates[index].TrySetResult(content);
+        }
+
+        public Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult((true, "連線成功"));
     }
 }

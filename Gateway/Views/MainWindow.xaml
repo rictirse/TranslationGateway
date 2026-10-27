@@ -142,6 +142,21 @@
                 </Button>
                 <TextBlock Text="{Binding StreamStatus}" Foreground="{StaticResource SidebarMutedBrush}"
                            FontSize="11" TextWrapping="Wrap" Margin="18,4,12,0"/>
+                <!-- 開台失敗缺套件（streamlink／PotPlayer）的下載頁按鈕：沒有網址時收合 -->
+                <Button Content="{Binding StreamHelpLabel}" Command="{Binding OpenStreamHelpCommand}"
+                        FontSize="11" Padding="6,2" Margin="18,4,12,0" HorizontalAlignment="Left"
+                        ToolTip="開啟缺少套件的下載頁面">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StreamHelpUrl}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
                 <!-- 開台資料探勘等待中（只設定翻譯模型時）的中斷按鈕：取消探勘、馬上啟動 PotPlayer -->
                 <Button Content="中斷探勘，直接播放" Command="{Binding SkipStreamMiningCommand}"
                         FontSize="11" Padding="6,2" Margin="18,4,12,0" HorizontalAlignment="Left"

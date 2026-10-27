@@ -6,7 +6,7 @@ using Translation.Bridge.Core.Models;
 
 namespace Translation.Bridge.Core.Services;
 
-public sealed class SqliteTranslationStore : ITranslationStore, IGlossaryStore, ISubtitleLogStore, ICaptionStore, IAuditStore
+public sealed class SqliteTranslationStore : ITranslationStore, IGlossaryStore, ISubtitleLogStore, ICaptionStore, IAuditStore, IVideoChapterStore
 {
     /// <summary>時間欄位一律存 UTC，格式與 datetime('now') 一致。</summary>
     private const string TimestampFormat = "yyyy-MM-dd HH:mm:ss";
@@ -843,6 +843,80 @@ public sealed class SqliteTranslationStore : ITranslationStore, IGlossaryStore, 
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "寫入 CaptionSentences 失敗：caption {CaptionId}", captionId);
+        }
+    }
+
+    // ===== IVideoChapterStore（失敗不擲例外：讀取回空清單、寫入刪除只記 Warning） =====
+
+    /// <summary>這支影片存的章節（依 StartMs 排序）；沒有或失敗回空清單。</summary>
+    public IReadOnlyList<StoredVideoChapter> GetVideoChapters(string videoId)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            return connection.Query<StoredVideoChapter>(
+                "SELECT StartMs, Title, Translation, DurationMs, Source FROM VideoChapters " +
+                "WHERE VideoId = @videoId ORDER BY StartMs",
+                new { videoId }).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "讀取 VideoChapters 失敗：{VideoId}", videoId);
+            return [];
+        }
+    }
+
+    /// <summary>同一個交易內刪掉這支影片的全部章節再寫入 chapters（全部同一個 Source）；失敗只記 Warning。</summary>
+    public void ReplaceVideoChapters(string videoId, IReadOnlyList<StoredVideoChapter> chapters)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+            try
+            {
+                connection.Execute(
+                    "DELETE FROM VideoChapters WHERE VideoId = @videoId", new { videoId }, transaction);
+                connection.Execute(
+                    "INSERT INTO VideoChapters (VideoId, StartMs, Title, Translation, DurationMs, Source, CreatedAt, UpdatedAt) " +
+                    "VALUES (@videoId, @StartMs, @Title, @Translation, @DurationMs, @Source, @createdAt, @createdAt)",
+                    chapters.Select(chapter => new
+                    {
+                        videoId,
+                        chapter.StartMs,
+                        chapter.Title,
+                        chapter.Translation,
+                        chapter.DurationMs,
+                        chapter.Source,
+                        createdAt = FormatUtc(DateTime.UtcNow)
+                    }),
+                    transaction);
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "寫入 VideoChapters 失敗：{VideoId}", videoId);
+        }
+    }
+
+    /// <summary>刪掉這支影片的全部章節；失敗只記 Warning。</summary>
+    public void DeleteVideoChapters(string videoId)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Execute("DELETE FROM VideoChapters WHERE VideoId = @videoId", new { videoId });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "刪除 VideoChapters 失敗：{VideoId}", videoId);
         }
     }
 
